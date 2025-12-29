@@ -4,7 +4,9 @@
     <meta charset="UTF-8">
     <title>Quote Preview & Gatekeeper</title>
     <script src="https://live.zwidgets.com/js-sdk/1.2/ZohoEmbededAppSDK.min.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
+    
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
 
     <style>
         body { font-family: 'Segoe UI', Arial, sans-serif; background-color: #f4f5f7; padding: 20px; color: #333; }
@@ -61,7 +63,7 @@
         <button class="btn-restart" onclick="handleStartOver()">&#8634; Start Over</button>
         <button class="btn-save" id="btnSave" onclick="handleSaveAndFinish()"><span>Save PDF & Finish</span> <span>&#10140;</span></button>
     </div>
-    <div class="version-footer">Widget Version: V11 (Manual Upload)</div>
+    <div class="version-footer">Widget Version: V12 (Stable Engine)</div>
 </div>
 
 <script>
@@ -69,7 +71,6 @@
     const RESTART_TRANSITION_NAME = "Solution Design"; 
     const PROCEED_TRANSITION_NAME = "Proceed"; 
 
-    // ID MAP
     const ID_MAP = {
         "DID_LOCAL": "1231536000013261029", "DID_TF": "1231536000013261030",
         "LNP_LOCAL": "1231536000013261027", "LNP_TF": "1231536000013261028",
@@ -263,42 +264,85 @@
         renderRows(lineItems.nrc, "nrcBody", "totalNrcDisplay");
     }
 
-    function handleSaveAndFinish() {
+    // --- 6. MANUAL PDF GENERATION & UPLOAD ---
+    async function handleSaveAndFinish() {
         if(!dealRecord) { alert("Data not loaded"); return; }
         if(!confirm("Proceed?")) return;
         showLoader(true, "Generating PDF...");
 
-        let element = document.getElementById('quoteContainer');
-        let filename = "Quote_Preview.pdf";
-        let opt = { margin: 0.5, filename: filename, image: { type: 'jpeg', quality: 0.98 },
-                    html2canvas: { scale: 2 }, jsPDF: { unit: 'in', format: 'letter' } };
+        try {
+            // A. CAPTURE CANVAS
+            const { jsPDF } = window.jspdf;
+            let element = document.getElementById('quoteContainer');
+            
+            let canvas = await html2canvas(element, { scale: 2 });
+            let imgData = canvas.toDataURL('image/jpeg', 0.98);
 
-        html2pdf().set(opt).from(element).outputPdf('blob').then(function(blob) {
-            uploadToCRM(blob, filename);
-        });
+            // B. BUILD PDF
+            // Letter size: 8.5 x 11 inches
+            let pdf = new jsPDF({ orientation: 'p', unit: 'in', format: 'letter' });
+            let imgProps = pdf.getImageProperties(imgData);
+            let pdfWidth = 8.5 - 1.0; // 0.5 inch margins
+            let pdfHeight = (imgProps.height * pdfWidth) / imgProps.width;
+            
+            pdf.addImage(imgData, 'JPEG', 0.5, 0.5, pdfWidth, pdfHeight);
+            let blob = pdf.output('blob');
+
+            // C. UPLOAD
+            uploadToCRM(blob, "Quote_Preview.pdf");
+
+        } catch (e) {
+            console.error(e);
+            alert("PDF Generation Error: " + e.message);
+            showLoader(false);
+        }
     }
 
     function uploadToCRM(blob, filename) {
-        document.getElementById("loaderText").innerText = "Uploading via API...";
+        document.getElementById("loaderText").innerText = "Uploading...";
         
-        var file = new File([blob], filename, { type: "application/pdf" });
+        let file = new File([blob], filename, { type: "application/pdf" });
 
-        // USE httpRequest to bypass attachFile wrapper quirks
-        ZOHO.CRM.API.httpRequest({
-            url: "/crm/v2/Deals/" + dealId + "/Attachments",
-            method: "POST",
-            files: { file: file } // This is key for SDK httpRequest file upload
+        // Using standard attachFile - File key set to 'file' (Standard for SDK 1.2)
+        ZOHO.CRM.API.attachFile({ 
+            Entity: "Deals", 
+            RecordID: dealId, 
+            File: { file: file } 
         })
         .then(function(data) {
-            console.log("API Upload Success:", data);
+            console.log("Upload Success:", data);
             document.getElementById("loaderText").innerText = "Advancing Blueprint...";
             ZOHO.CRM.BLUEPRINT.proceed({ transition_id: PROCEED_TRANSITION_NAME, data: {} })
             .then(function() { ZOHO.CRM.UI.Popup.closeReload(); });
         })
         .catch(function(err) { 
-            console.error("API Upload Error:", err);
-            alert("Error: " + JSON.stringify(err));
-            showLoader(false); 
+            console.error("Upload Error:", err);
+            // Fallback: If 'file' key fails, some older SDK builds want 'file_obj'
+            // We retry once with 'file_obj' key if the first one fails
+            if(err.message && err.message.includes("request does not contain")) {
+                console.log("Retrying with 'file_obj' key...");
+                retryUploadLegacy(file);
+            } else {
+                alert("Upload Error: " + JSON.stringify(err));
+                showLoader(false); 
+            }
+        });
+    }
+
+    function retryUploadLegacy(file) {
+        ZOHO.CRM.API.attachFile({ 
+            Entity: "Deals", 
+            RecordID: dealId, 
+            File: { file_obj: file } 
+        })
+        .then(function(data) {
+            document.getElementById("loaderText").innerText = "Advancing Blueprint...";
+            ZOHO.CRM.BLUEPRINT.proceed({ transition_id: PROCEED_TRANSITION_NAME, data: {} })
+            .then(function() { ZOHO.CRM.UI.Popup.closeReload(); });
+        })
+        .catch(function(err){
+             alert("Final Upload Failure: " + JSON.stringify(err));
+             showLoader(false);
         });
     }
 
