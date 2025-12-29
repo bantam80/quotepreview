@@ -5,14 +5,11 @@
     <title>Quote Preview & Gatekeeper</title>
     
     <script>
-        // Polyfill setImmediate to use setTimeout. 
-        // This prevents libraries from using window.postMessage for timing,
-        // which conflicts with Zoho's SDK messaging system.
         window.setImmediate = window.setImmediate || function(fn) { return window.setTimeout(fn, 0); };
         window.clearImmediate = window.clearImmediate || function(id) { window.clearTimeout(id); };
     </script>
 
-    <script src="https://live.zwidgets.com/js-sdk/1.2/ZohoEmbededAppSDK.min.js"></script>
+    <script src="https://live.zwidgets.com/js-sdk/1.1/ZohoEmbededAppSDK.min.js"></script>
     
     <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
@@ -38,6 +35,8 @@
         .btn-restart:hover { background-color: #dc3545; color: white; }
         .btn-save { background-color: #28a745; color: white; display: flex; align-items: center; gap: 8px; }
         .btn-save:hover { background-color: #218838; }
+        .btn-test { background-color: #6c757d; color: white; margin-right: 10px; }
+        
         #loader { display: none; position: fixed; top:0; left:0; width:100%; height:100%; background: rgba(255,255,255,0.8); z-index: 999; text-align: center; padding-top: 200px; }
         .spinner { border: 4px solid #f3f3f3; border-top: 4px solid #3498db; border-radius: 50%; width: 40px; height: 40px; animation: spin 1s linear infinite; display: inline-block; }
         @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
@@ -70,16 +69,18 @@
 <div class="container" style="margin-top: 15px; background: transparent; box-shadow: none; padding: 0;">
     <div class="action-bar">
         <button class="btn-restart" onclick="handleStartOver()">&#8634; Start Over</button>
-        <button class="btn-save" id="btnSave" onclick="handleSaveAndFinish()"><span>Save PDF & Finish</span> <span>&#10140;</span></button>
+        <div>
+            <button class="btn-test" onclick="handleTestUpload()">Test Upload</button>
+            <button class="btn-save" id="btnSave" onclick="handleSaveAndFinish()"><span>Save PDF & Finish</span> <span>&#10140;</span></button>
+        </div>
     </div>
-    <div class="version-footer">Widget Version: V18 (Polyfill Patch)</div>
+    <div class="version-footer">Widget Version: V19 (Blob Hack)</div>
 </div>
 
 <script>
     // --- 1. CONFIGURATION ---
     const RESTART_TRANSITION_NAME = "Solution Design"; 
     const PROCEED_TRANSITION_NAME = "Proceed"; 
-    const CONNECTION_NAME = "crmapi";
 
     const ID_MAP = {
         "DID_LOCAL": "1231536000013261029", "DID_TF": "1231536000013261030",
@@ -161,12 +162,9 @@
         for(let f in MRC_CONFIG) { if(getVal(f) > 0 || getVal(f) === "Yes") queue(MRC_CONFIG[f]); }
         for(let f in SETUP_CONFIG) { if(getVal(f) > 0) queue(SETUP_CONFIG[f]); }
         ENTITLEMENT_LIST.forEach(e => { if(getVal(e.field) > 0) queue(e.key); });
-        
         if(getVal("Est_Toll_Free_Minutes") > 0) queue("TF_BUNDLE");
-        
         let phoneSubform = dealRecord.Phone_Hardware || [];
         phoneSubform.forEach(row => { if(row.Phone_Selection) productsToFetch.add(row.Phone_Selection.id); });
-        
         queue("SITE_SURVEY"); queue("LABOR");
 
         let priceMap = {};
@@ -186,7 +184,6 @@
                 lineItems.mrc.push({ name: priceMap[ID_MAP[key]].name, qty: qty, price: priceMap[ID_MAP[key]].price, hasOnboarding: (SETUP_CONFIG[field] !== undefined) });
             }
         }
-
         // Build Setup
         for(let field in SETUP_CONFIG) {
             let qty = parseFloat(getVal(field) || 0);
@@ -195,7 +192,6 @@
                 lineItems.nrc.push({ name: priceMap[ID_MAP[key]].name + " (Setup)", qty: qty, price: priceMap[ID_MAP[key]].price });
             }
         }
-
         // Build Entitlements
         let remEnt = parseFloat(getVal("TN_Entitlements") || 0);
         ENTITLEMENT_LIST.forEach(item => {
@@ -203,9 +199,7 @@
             let prodId = ID_MAP[item.key];
             if(qty > 0 && prodId && priceMap[prodId]) {
                 let freeQty = 0, paidQty = 0;
-                if(qty <= remEnt) { freeQty = qty; remEnt -= qty; } 
-                else { freeQty = remEnt; paidQty = qty - remEnt; remEnt = 0; }
-                
+                if(qty <= remEnt) { freeQty = qty; remEnt -= qty; } else { freeQty = remEnt; paidQty = qty - remEnt; remEnt = 0; }
                 let pName = priceMap[prodId].name;
                 if(freeQty > 0) {
                     lineItems.mrc.push({ name: pName, qty: freeQty, price: 0, isEntitlement: true, hasOnboarding: false });
@@ -217,7 +211,6 @@
                 }
             }
         });
-
         // Build Bundles
         let tfMinutes = parseFloat(getVal("Est_Toll_Free_Minutes") || 0);
         if(tfMinutes > 0 && ID_MAP["TF_BUNDLE"] && priceMap[ID_MAP["TF_BUNDLE"]]) {
@@ -225,7 +218,6 @@
             let p = priceMap[ID_MAP["TF_BUNDLE"]];
             lineItems.mrc.push({ name: p.name + ` (${tfMinutes} min)`, qty: qty, price: p.price, hasOnboarding: false });
         }
-
         // Build Hardware
         phoneSubform.forEach(row => {
             let pid = row.Phone_Selection ? row.Phone_Selection.id : null;
@@ -234,7 +226,6 @@
                 lineItems.nrc.push({ name: priceMap[pid].name, qty: qty, price: priceMap[pid].price });
             }
         });
-
         // Build Labor
         let analogCount = parseFloat(getVal("Analog_Line_Count")||0) + parseFloat(getVal("POTS_for_Paging_Qty")||0) + parseFloat(getVal("T_38_Fax")||0);
         if(analogCount > 0 && ID_MAP["SITE_SURVEY"] && priceMap[ID_MAP["SITE_SURVEY"]]) {
@@ -276,7 +267,37 @@
         renderRows(lineItems.nrc, "nrcBody", "totalNrcDisplay");
     }
 
-    // --- 6. UPLOAD VIA CONNECTION (WITH MESSAGE GUARD) ---
+    // --- 6. UPLOAD STRATEGY ---
+
+    // A. TEST BUTTON: Uploads a simple text file to check SDK health
+    function handleTestUpload() {
+        if(!dealRecord) return;
+        showLoader(true, "Testing SDK Upload...");
+        
+        // Create a simple text blob (not a File object initially)
+        var blob = new Blob(["Hello Zoho"], { type: 'text/plain' });
+        
+        // HACK: Add File properties to the Blob directly
+        blob.name = "Test_File.txt";
+        blob.lastModifiedDate = new Date();
+        
+        ZOHO.CRM.API.attachFile({ 
+            Entity: "Deals", 
+            RecordID: dealId, 
+            File: { file: blob } // Sending Modified Blob
+        })
+        .then(function(data){
+            alert("Test Upload SUCCESS! The SDK is working.\nNow try the PDF button.");
+            showLoader(false);
+        })
+        .catch(function(err){
+            console.error("Test Fail:", err);
+            alert("Test Upload FAILED.\n" + JSON.stringify(err));
+            showLoader(false);
+        });
+    }
+
+    // B. REAL PDF UPLOAD
     async function handleSaveAndFinish() {
         if(!dealRecord) { alert("Data not loaded"); return; }
         if(!confirm("Proceed?")) return;
@@ -296,7 +317,9 @@
             pdf.addImage(imgData, 'JPEG', 0.5, 0.5, pdfWidth, pdfHeight);
             
             let blob = pdf.output('blob');
-            uploadToCRM(blob, "Quote_Preview.pdf");
+            let filename = "Quote_Preview.pdf";
+
+            uploadToCRM(blob, filename);
 
         } catch (e) {
             console.error(e);
@@ -306,42 +329,41 @@
     }
 
     function uploadToCRM(blob, filename) {
-        document.getElementById("loaderText").innerText = "Uploading via " + CONNECTION_NAME + "...";
+        document.getElementById("loaderText").innerText = "Uploading...";
         
-        let file = new File([blob], filename, { type: "application/pdf" });
+        // HACK: Bypass 'new File()' constructor issue in iframe
+        // We take the raw Blob and inject the properties Zoho SDK checks for.
+        blob.name = filename;
+        blob.lastModifiedDate = new Date();
 
-        // CONNECTION INVOKE: The most reliable method when attachFile fails
-        ZOHO.CRM.CONNECTION.invoke(CONNECTION_NAME, {
-            url: "https://www.zohoapis.com/crm/v2/Deals/" + dealId + "/Attachments",
-            method: "POST",
-            param_type: 2, // Multipart Form
-            files: { file: file } // SDK 1.2+ style
+        ZOHO.CRM.API.attachFile({ 
+            Entity: "Deals", 
+            RecordID: dealId, 
+            File: { file: blob } 
         })
         .then(function(data) {
             console.log("Upload Success:", data);
-            
-            // Check for success code from API
-            if(data.code === "SUCCESS" || (data.details && data.details.status === "success") || Array.isArray(data.data)) {
-                 document.getElementById("loaderText").innerText = "Advancing Blueprint...";
-                 ZOHO.CRM.BLUEPRINT.proceed({ transition_id: PROCEED_TRANSITION_NAME, data: {} })
-                 .then(function() { ZOHO.CRM.UI.Popup.closeReload(); });
-            } else {
-                 throw new Error("API Response: " + JSON.stringify(data));
-            }
+            document.getElementById("loaderText").innerText = "Advancing Blueprint...";
+            ZOHO.CRM.BLUEPRINT.proceed({ transition_id: PROCEED_TRANSITION_NAME, data: {} })
+            .then(function() { ZOHO.CRM.UI.Popup.closeReload(); });
         })
         .catch(function(err) { 
-            console.error("Connection Error:", err);
-            // Fallback: If Connection fails, try standard attachFile one last time
-            // (Sometimes the message guard fixes attachFile too)
-            console.log("Trying fallback to standard attachFile...");
-            ZOHO.CRM.API.attachFile({ Entity: "Deals", RecordID: dealId, File: { file: file } })
-            .then(function(){
-                 ZOHO.CRM.BLUEPRINT.proceed({ transition_id: PROCEED_TRANSITION_NAME, data: {} }).then(() => ZOHO.CRM.UI.Popup.closeReload());
-            })
-            .catch(function(finalErr){
-                 alert("Upload Failed. Please check Connection 'crmapi'.\n" + JSON.stringify(err));
-                 showLoader(false);
-            });
+            console.error("Upload Error:", err);
+            // Retry with 'file_obj' key if first attempt fails
+            if(err && JSON.stringify(err).indexOf("INVALID_DATA") > -1) {
+                 console.log("Retrying with file_obj...");
+                 ZOHO.CRM.API.attachFile({ Entity: "Deals", RecordID: dealId, File: { file_obj: blob } })
+                 .then(function(){
+                     ZOHO.CRM.BLUEPRINT.proceed({ transition_id: PROCEED_TRANSITION_NAME, data: {} }).then(() => ZOHO.CRM.UI.Popup.closeReload());
+                 })
+                 .catch(function(finalErr) {
+                     alert("Upload Failed: " + JSON.stringify(finalErr));
+                     showLoader(false);
+                 });
+            } else {
+                alert("Upload Failed: " + JSON.stringify(err));
+                showLoader(false);
+            }
         });
     }
 
