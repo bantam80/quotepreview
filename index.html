@@ -63,13 +63,14 @@
         <button class="btn-restart" onclick="handleStartOver()">&#8634; Start Over</button>
         <button class="btn-save" id="btnSave" onclick="handleSaveAndFinish()"><span>Save PDF & Finish</span> <span>&#10140;</span></button>
     </div>
-    <div class="version-footer">Widget Version: V15 (Multi-Strategy Upload)</div>
+    <div class="version-footer">Widget Version: V16 (Connection Invoke)</div>
 </div>
 
 <script>
     // --- 1. CONFIGURATION ---
     const RESTART_TRANSITION_NAME = "Solution Design"; 
     const PROCEED_TRANSITION_NAME = "Proceed"; 
+    const CONNECTION_NAME = "crmapi";
 
     const ID_MAP = {
         "DID_LOCAL": "1231536000013261029", "DID_TF": "1231536000013261030",
@@ -264,7 +265,7 @@
         renderRows(lineItems.nrc, "nrcBody", "totalNrcDisplay");
     }
 
-    // --- 6. MULTI-STRATEGY UPLOAD ---
+    // --- 6. CONNECTION UPLOAD ---
     async function handleSaveAndFinish() {
         if(!dealRecord) { alert("Data not loaded"); return; }
         if(!confirm("Proceed?")) return;
@@ -284,9 +285,7 @@
             let blob = pdf.output('blob');
             let filename = "Quote_Preview.pdf";
 
-            // STRATEGY 1: Standard 'file' key
-            console.log("Strategy 1: 'file' key");
-            tryUpload({ file: new File([blob], filename, {type:"application/pdf"}) }, blob, filename, 1);
+            uploadViaConnection(blob, filename);
 
         } catch (e) {
             console.error(e);
@@ -295,35 +294,55 @@
         }
     }
 
-    function tryUpload(payloadObj, blob, filename, attempt) {
-        document.getElementById("loaderText").innerText = "Upload Attempt " + attempt + "...";
+    function uploadViaConnection(blob, filename) {
+        document.getElementById("loaderText").innerText = "Uploading via " + CONNECTION_NAME + "...";
+
+        // Convert Blob to File
+        var file = new File([blob], filename, { type: "application/pdf" });
+
+        // IMPORTANT: Invoke uses a different structure for Multipart
+        // We must pass the "Files" object, but some widgets SDK versions parse "parameters" instead
         
-        ZOHO.CRM.API.attachFile({ 
-            Entity: "Deals", 
-            RecordID: dealId, 
-            File: payloadObj 
+        var formData = new FormData();
+        formData.append("file", file);
+
+        // NOTE: ZOHO.CRM.CONNECTION.invoke has known issues with direct file/blob passing in some environments.
+        // We will try the "files" property which is specific to this method.
+        
+        ZOHO.CRM.CONNECTION.invoke(CONNECTION_NAME, {
+            url: "https://www.zohoapis.com/crm/v2/Deals/" + dealId + "/Attachments",
+            method: "POST",
+            param_type: 2, // 1=Query, 2=Form
+            files: { file: file } // Special key for invoke file upload
         })
         .then(function(data) {
-            console.log("Success on Attempt " + attempt, data);
-            document.getElementById("loaderText").innerText = "Advancing Blueprint...";
-            ZOHO.CRM.BLUEPRINT.proceed({ transition_id: PROCEED_TRANSITION_NAME, data: {} })
-            .then(function() { ZOHO.CRM.UI.Popup.closeReload(); });
+            console.log("Connection Success:", data);
+            if(data.code === "SUCCESS" || (data.details && data.details.status === "success")) {
+                document.getElementById("loaderText").innerText = "Advancing Blueprint...";
+                ZOHO.CRM.BLUEPRINT.proceed({ transition_id: PROCEED_TRANSITION_NAME, data: {} })
+                .then(function() { ZOHO.CRM.UI.Popup.closeReload(); });
+            } else {
+                 throw new Error(JSON.stringify(data));
+            }
         })
         .catch(function(err) {
-            console.error("Attempt " + attempt + " Failed:", err);
-            
-            if(attempt === 1) {
-                // STRATEGY 2: Legacy 'file_obj' key
-                console.log("Strategy 2: 'file_obj' key");
-                tryUpload({ file_obj: new File([blob], filename, {type:"application/pdf"}) }, blob, filename, 2);
-            } else if (attempt === 2) {
-                // STRATEGY 3: List Wrapper (Common in older SDKs)
-                console.log("Strategy 3: List Wrapper");
-                tryUpload({ file: [new File([blob], filename, {type:"application/pdf"})] }, blob, filename, 3);
-            } else {
-                alert("All upload strategies failed. Please contact support.\n" + JSON.stringify(err));
-                showLoader(false);
-            }
+            console.error("Connection Error:", err);
+            // Fallback: Try one last time with simple Attachments API wrapper if Connection fails
+            alert("Connection Upload Failed. Trying Fallback...\n" + JSON.stringify(err));
+            uploadFallback(file);
+        });
+    }
+
+    function uploadFallback(file) {
+        // Last resort: Simple Attachments wrapper again (sometimes works after connection auth primes the session)
+        ZOHO.CRM.API.attachFile({ Entity: "Deals", RecordID: dealId, File: { file: file } })
+        .then(function(data){
+             ZOHO.CRM.BLUEPRINT.proceed({ transition_id: PROCEED_TRANSITION_NAME, data: {} })
+             .then(function() { ZOHO.CRM.UI.Popup.closeReload(); });
+        })
+        .catch(function(err){
+             alert("Final Failure. Please contact admin.");
+             showLoader(false);
         });
     }
 
