@@ -8,14 +8,11 @@
 
     <style>
         body { font-family: 'Segoe UI', Arial, sans-serif; background-color: #f4f5f7; padding: 20px; color: #333; }
-        
-        /* CONTAINER */
         .container { max-width: 900px; margin: 0 auto; background: #fff; padding: 30px; border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.1); }
         .header { display: flex; justify-content: space-between; align-items: center; border-bottom: 2px solid #eee; padding-bottom: 20px; margin-bottom: 20px; }
         .header h2 { margin: 0; color: #2c3e50; }
         .doc-info { text-align: right; font-size: 14px; color: #777; }
         
-        /* TABLES */
         .section-title { font-size: 16px; font-weight: bold; margin: 20px 0 10px; color: #444; text-transform: uppercase; letter-spacing: 0.5px; border-bottom: 1px solid #ddd; padding-bottom: 5px; }
         table { width: 100%; border-collapse: collapse; margin-bottom: 10px; font-size: 14px; }
         th { background: #f8f9fa; color: #555; text-align: left; padding: 10px; border-bottom: 2px solid #ddd; font-weight: 600; }
@@ -24,11 +21,9 @@
         .col-money { width: 100px; text-align: right; }
         .total-row td { font-weight: bold; background-color: #fdfdfd; border-top: 2px solid #ddd; color: #000; }
         
-        /* BADGES */
         .badge-included { background: #e6f4ea; color: #1e7e34; padding: 2px 6px; border-radius: 4px; font-size: 11px; font-weight: bold; }
         .badge-excess { background: #fff3cd; color: #856404; padding: 2px 6px; border-radius: 4px; font-size: 11px; font-weight: bold; }
         
-        /* ACTION BAR */
         .action-bar { margin-top: 30px; padding-top: 20px; border-top: 2px solid #eee; display: flex; justify-content: space-between; align-items: center; }
         button { padding: 12px 24px; border: none; border-radius: 5px; font-size: 15px; font-weight: bold; cursor: pointer; transition: background 0.2s; }
         .btn-restart { background-color: #fff; border: 2px solid #dc3545; color: #dc3545; }
@@ -36,7 +31,6 @@
         .btn-save { background-color: #28a745; color: white; display: flex; align-items: center; gap: 8px; }
         .btn-save:hover { background-color: #218838; }
         
-        /* LOADER & FOOTER */
         #loader { display: none; position: fixed; top:0; left:0; width:100%; height:100%; background: rgba(255,255,255,0.8); z-index: 999; text-align: center; padding-top: 200px; }
         .spinner { border: 4px solid #f3f3f3; border-top: 4px solid #3498db; border-radius: 50%; width: 40px; height: 40px; animation: spin 1s linear infinite; display: inline-block; }
         @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
@@ -73,51 +67,26 @@
         <button class="btn-restart" onclick="handleStartOver()">&#8634; Start Over</button>
         <button class="btn-save" id="btnSave" onclick="handleSaveAndFinish()"><span>Save PDF & Finish</span> <span>&#10140;</span></button>
     </div>
-    <div class="version-footer">Widget Version: V9</div>
+    <div class="version-footer">Widget Version: V10 (Debug)</div>
 </div>
 
 <script>
-    /* =================================================================
-       1. CONFIGURATION
-       ================================================================= */
-    
-    // BLUEPRINT TRANSITIONS
+    // --- 1. CONFIGURATION ---
     const RESTART_TRANSITION_NAME = "Solution Design"; 
     const PROCEED_TRANSITION_NAME = "Proceed"; 
 
     // ID MAP
     const ID_MAP = {
-        // ENTITLEMENTS (User Provided)
-        "DID_LOCAL": "1231536000013261029",
-        "DID_TF":    "1231536000013261030",
-        "LNP_LOCAL": "1231536000013261027",
-        "LNP_TF":    "1231536000013261028",
-
-        // BUNDLES
+        "DID_LOCAL": "1231536000013261029", "DID_TF": "1231536000013261030",
+        "LNP_LOCAL": "1231536000013261027", "LNP_TF": "1231536000013261028",
         "TF_BUNDLE": "1231536000013499029",
-
-        // STANDARD ITEMS
-        "VMTRANS":   "1231536000013241029", 
-        "ENHCLID":   "1231536000013499025", 
-        "E911":      "1231536000013499026",
-        "SIP_TRUNK": "1231536000013499027", 
-        "SIP_PRI":   "1231536000013241014", 
-        "SIP_BACK":  "1231536000013499028",
-        "UC_STD":    "1231536000009612019", 
-        "UC_ADV":    "1231536000009612022", 
-        "UC_CC":     "1231536000009612025",
-        "POTS":      "1231536000013241011", 
-        "WEBFAX":    "1231536000013241043", 
-        "T38":       "1231536000013241017",
-        "TEAMS_SIP": "1231536000013241023", 
-        "TEAMS_PBX": "1231536000013241020", 
-        "FAX_EMAIL": "1231536000013241026",
-        "ONB_ADV":   "1231536000009612029", 
-        "ONB_STD":   "1231536000009612028", 
-        "ONB_CC":    "1231536000009612030",
-        "ONB_POTS":  "1231536000013241066", 
-        "SITE_SURVEY": "1231536000013499030", 
-        "LABOR":     "1231536000013235207"
+        "VMTRANS": "1231536000013241029", "ENHCLID": "1231536000013499025", "E911": "1231536000013499026",
+        "SIP_TRUNK": "1231536000013499027", "SIP_PRI": "1231536000013241014", "SIP_BACK": "1231536000013499028",
+        "UC_STD": "1231536000009612019", "UC_ADV": "1231536000009612022", "UC_CC": "1231536000009612025",
+        "POTS": "1231536000013241011", "WEBFAX": "1231536000013241043", "T38": "1231536000013241017",
+        "TEAMS_SIP": "1231536000013241023", "TEAMS_PBX": "1231536000013241020", "FAX_EMAIL": "1231536000013241026",
+        "ONB_ADV": "1231536000009612029", "ONB_STD": "1231536000009612028", "ONB_CC": "1231536000009612030",
+        "ONB_POTS": "1231536000013241066", "SITE_SURVEY": "1231536000013499030", "LABOR": "1231536000013235207"
     };
 
     const SAFE_FIELDS = [
@@ -127,59 +96,34 @@
         "Modified_Time", "Created_By", "Modified_By", "Tag", "Layout", "Wizard_Dependency"
     ];
 
-    // CONFIG MAPS
     const MRC_CONFIG = {
-        "Voicemail_Transcription": "VMTRANS", 
-        "Enhanced_Caller_ID":      "ENHCLID", 
-        "E911_Locations":          "E911",
-        "SIP_Trunks_Qty":          "SIP_TRUNK", 
-        "TTL_SIP_Trunks_Primary":  "SIP_PRI", 
-        "TTL_SIP_Trunks_Backup":   "SIP_BACK",
-        "Standard_Qty":            "UC_STD", 
-        "Advanced_Qty":            "UC_ADV", 
-        "Contact_Center_Qty":      "UC_CC",
-        "POTS_for_Paging_Qty":     "POTS", 
-        "Webfax":                  "WEBFAX", 
-        "T_38_Fax":                "T38",
-        "MS_Teams_SIP":            "TEAMS_SIP", 
-        "MS_Teams_PBX":            "TEAMS_PBX", 
-        "Fax_to_Email":            "FAX_EMAIL"
+        "Voicemail_Transcription": "VMTRANS", "Enhanced_Caller_ID": "ENHCLID", "E911_Locations": "E911",
+        "SIP_Trunks_Qty": "SIP_TRUNK", "TTL_SIP_Trunks_Primary": "SIP_PRI", "TTL_SIP_Trunks_Backup": "SIP_BACK",
+        "Standard_Qty": "UC_STD", "Advanced_Qty": "UC_ADV", "Contact_Center_Qty": "UC_CC",
+        "POTS_for_Paging_Qty": "POTS", "Webfax": "WEBFAX", "T_38_Fax": "T38",
+        "MS_Teams_SIP": "TEAMS_SIP", "MS_Teams_PBX": "TEAMS_PBX", "Fax_to_Email": "FAX_EMAIL"
     };
 
     const SETUP_CONFIG = {
-        "Advanced_Qty":        "ONB_ADV", 
-        "Standard_Qty":        "ONB_STD", 
-        "Contact_Center_Qty":  "ONB_CC",
-        "Analog_Line_Count":   "ONB_POTS", 
-        "POTS_for_Paging_Qty": "ONB_POTS", 
-        "Webfax":              "ONB_ADV",
-        "T_38_Fax":            "ONB_POTS", 
-        "MS_Teams_SIP":        "ONB_ADV", 
-        "MS_Teams_PBX":        "ONB_ADV",
-        "Fax_to_Email":        "ONB_STD"
+        "Advanced_Qty": "ONB_ADV", "Standard_Qty": "ONB_STD", "Contact_Center_Qty": "ONB_CC",
+        "Analog_Line_Count": "ONB_POTS", "POTS_for_Paging_Qty": "ONB_POTS", "Webfax": "ONB_ADV",
+        "T_38_Fax": "ONB_POTS", "MS_Teams_SIP": "ONB_ADV", "MS_Teams_PBX": "ONB_ADV", "Fax_to_Email": "ONB_STD"
     };
 
-    // ENTITLEMENTS (UPDATED FIELDS)
     const ENTITLEMENT_LIST = [
-        { field: "New_DID_Qty", key: "DID_LOCAL" }, 
-        { field: "Porting_DID_Qty", key: "LNP_LOCAL" },
-        { field: "New_TFN_Qty", key: "DID_TF" }, 
-        { field: "Porting_TFN_Qty", key: "LNP_TF" }
+        { field: "New_DID_Qty", key: "DID_LOCAL" }, { field: "Porting_DID_Qty", key: "LNP_LOCAL" },
+        { field: "New_TFN_Qty", key: "DID_TF" }, { field: "Porting_TFN_Qty", key: "LNP_TF" }
     ];
     
     const EXCESS_MRC_RATE = 1.00;
     const EXCESS_NRC_RATE = 2.00;
 
-    /* =================================================================
-       2. GLOBAL STATE
-       ================================================================= */
+    // --- 2. STATE ---
     var dealId = null;
     var dealRecord = null;
     var lineItems = { mrc: [], nrc: [] };
 
-    /* =================================================================
-       3. INITIALIZATION
-       ================================================================= */
+    // --- 3. INIT ---
     ZOHO.embeddedApp.on("PageLoad", function(data){
         if(data && data.EntityId) {
             dealId = Array.isArray(data.EntityId) ? data.EntityId[0] : data.EntityId;
@@ -187,32 +131,23 @@
         }
     });
 
-    ZOHO.embeddedApp.init().then(function(){
-        console.log("Zoho SDK Initialized");
-    });
+    ZOHO.embeddedApp.init();
 
     function initWidget() {
         document.getElementById("dateDisplay").innerText = "Date: " + new Date().toLocaleDateString();
         showLoader(true, "Loading Deal Data...");
-        
-        ZOHO.CRM.API.getRecord({ Entity: "Deals", RecordID: dealId })
-        .then(function(response){
+        ZOHO.CRM.API.getRecord({ Entity: "Deals", RecordID: dealId }).then(function(response){
             if(response.data) {
                 dealRecord = response.data[0];
                 document.getElementById("dealNameDisplay").innerText = dealRecord.Deal_Name;
                 calculateQuote();
             }
-        })
-        .catch(function(err){ console.error("Fetch Error", err); });
+        });
     }
 
-    /* =================================================================
-       4. LOGIC
-       ================================================================= */
+    // --- 4. CALCULATION ---
     async function calculateQuote() {
         lineItems = { mrc: [], nrc: [] };
-        
-        // --- STEP 1: IDENTIFY PRODUCTS TO FETCH ---
         let productsToFetch = new Set();
         const queue = (key) => { if(ID_MAP[key]) productsToFetch.add(ID_MAP[key]); };
 
@@ -220,84 +155,55 @@
         for(let f in SETUP_CONFIG) { if(getVal(f) > 0) queue(SETUP_CONFIG[f]); }
         ENTITLEMENT_LIST.forEach(e => { if(getVal(e.field) > 0) queue(e.key); });
         
-        // Toll-Free Bundle
         if(getVal("Est_Toll_Free_Minutes") > 0) queue("TF_BUNDLE");
         
-        // Hardware
         let phoneSubform = dealRecord.Phone_Hardware || [];
         phoneSubform.forEach(row => { if(row.Phone_Selection) productsToFetch.add(row.Phone_Selection.id); });
         
         queue("SITE_SURVEY"); queue("LABOR");
 
-        // --- STEP 2: BATCH FETCH PRICES ---
         let priceMap = {};
         let fetchPromises = Array.from(productsToFetch).map(id => 
             ZOHO.CRM.API.getRecord({ Entity: "Products", RecordID: id }).then(r => {
-                if(r.data && r.data[0]) {
-                    priceMap[id] = { name: r.data[0].Product_Name, price: r.data[0].Unit_Price || 0 };
-                }
-            }).catch(e => console.error("Failed to fetch product: " + id))
+                if(r.data && r.data[0]) priceMap[id] = { name: r.data[0].Product_Name, price: r.data[0].Unit_Price || 0 };
+            }).catch(e => console.error(e))
         );
         await Promise.all(fetchPromises);
 
-        // --- STEP 3: BUILD LINES ---
-
-        // A. MRC ITEMS
+        // Build MRC
         for(let field in MRC_CONFIG) {
             let val = getVal(field);
             let qty = (val === "Yes" || val === true) ? 1 : parseFloat(val || 0);
             let key = MRC_CONFIG[field];
             if(qty > 0 && ID_MAP[key] && priceMap[ID_MAP[key]]) {
-                lineItems.mrc.push({ 
-                    name: priceMap[ID_MAP[key]].name, 
-                    qty: qty, 
-                    price: priceMap[ID_MAP[key]].price,
-                    hasOnboarding: (SETUP_CONFIG[field] !== undefined) // Mark for sorting
-                });
+                lineItems.mrc.push({ name: priceMap[ID_MAP[key]].name, qty: qty, price: priceMap[ID_MAP[key]].price, hasOnboarding: (SETUP_CONFIG[field] !== undefined) });
             }
         }
 
-        // B. SETUP ITEMS
+        // Build Setup
         for(let field in SETUP_CONFIG) {
             let qty = parseFloat(getVal(field) || 0);
             let key = SETUP_CONFIG[field];
             if(qty > 0 && ID_MAP[key] && priceMap[ID_MAP[key]]) {
-                lineItems.nrc.push({ 
-                    name: priceMap[ID_MAP[key]].name + " (Setup)", 
-                    qty: qty, 
-                    price: priceMap[ID_MAP[key]].price 
-                });
+                lineItems.nrc.push({ name: priceMap[ID_MAP[key]].name + " (Setup)", qty: qty, price: priceMap[ID_MAP[key]].price });
             }
         }
 
-        // C. ENTITLEMENTS (Strict Bucket Logic with Correct API Names)
+        // Build Entitlements
         let remEnt = parseFloat(getVal("TN_Entitlements") || 0);
-        
         ENTITLEMENT_LIST.forEach(item => {
             let qty = parseFloat(getVal(item.field) || 0);
             let prodId = ID_MAP[item.key];
-            
-            console.log(`Checking Entitlement: ${item.field}, Qty: ${qty}, ID: ${prodId}, FoundInMap: ${!!priceMap[prodId]}`);
-
             if(qty > 0 && prodId && priceMap[prodId]) {
-                let freeQty = 0;
-                let paidQty = 0;
-
-                if(qty <= remEnt) { 
-                    freeQty = qty; remEnt -= qty; 
-                } else { 
-                    freeQty = remEnt; paidQty = qty - remEnt; remEnt = 0; 
-                }
+                let freeQty = 0, paidQty = 0;
+                if(qty <= remEnt) { freeQty = qty; remEnt -= qty; } 
+                else { freeQty = remEnt; paidQty = qty - remEnt; remEnt = 0; }
                 
                 let pName = priceMap[prodId].name;
-
-                // FREE PORTION
                 if(freeQty > 0) {
                     lineItems.mrc.push({ name: pName, qty: freeQty, price: 0, isEntitlement: true, hasOnboarding: false });
                     lineItems.nrc.push({ name: pName, qty: freeQty, price: 0, isEntitlement: true });
                 }
-
-                // PAID PORTION
                 if(paidQty > 0) {
                     lineItems.mrc.push({ name: pName, qty: paidQty, price: EXCESS_MRC_RATE, isExcess: true, hasOnboarding: false });
                     lineItems.nrc.push({ name: pName, qty: paidQty, price: EXCESS_NRC_RATE, isExcess: true });
@@ -305,20 +211,15 @@
             }
         });
 
-        // D. TOLL-FREE BUNDLES
+        // Build Bundles
         let tfMinutes = parseFloat(getVal("Est_Toll_Free_Minutes") || 0);
         if(tfMinutes > 0 && ID_MAP["TF_BUNDLE"] && priceMap[ID_MAP["TF_BUNDLE"]]) {
             let qty = Math.ceil(tfMinutes / 500);
             let p = priceMap[ID_MAP["TF_BUNDLE"]];
-            lineItems.mrc.push({ 
-                name: p.name + ` (${tfMinutes} min)`, 
-                qty: qty, 
-                price: p.price,
-                hasOnboarding: false 
-            });
+            lineItems.mrc.push({ name: p.name + ` (${tfMinutes} min)`, qty: qty, price: p.price, hasOnboarding: false });
         }
 
-        // E. HARDWARE
+        // Build Hardware
         phoneSubform.forEach(row => {
             let pid = row.Phone_Selection ? row.Phone_Selection.id : null;
             let qty = parseFloat(row.Phone_Qty || 0);
@@ -327,13 +228,12 @@
             }
         });
 
-        // F. LABOR / SURVEY
+        // Build Labor
         let analogCount = parseFloat(getVal("Analog_Line_Count")||0) + parseFloat(getVal("POTS_for_Paging_Qty")||0) + parseFloat(getVal("T_38_Fax")||0);
         if(analogCount > 0 && ID_MAP["SITE_SURVEY"] && priceMap[ID_MAP["SITE_SURVEY"]]) {
             let p = priceMap[ID_MAP["SITE_SURVEY"]];
             lineItems.nrc.push({ name: p.name, qty: 1, price: p.price });
         }
-
         let totalPhones = phoneSubform.reduce((sum, r) => sum + parseFloat(r.Phone_Qty||0), 0);
         if(getVal("On_Site_Install") === "Yes" && totalPhones > 0 && ID_MAP["LABOR"] && priceMap[ID_MAP["LABOR"]]) {
             let p = priceMap[ID_MAP["LABOR"]];
@@ -347,14 +247,9 @@
 
     function getVal(key) { return dealRecord[key]; }
 
-    /* =================================================================
-       5. RENDER & ACTIONS
-       ================================================================= */
+    // --- 5. RENDER & ACTIONS ---
     function renderTables() {
-        
-        // SORT MRC: Onboarding items first
         lineItems.mrc.sort((a, b) => (b.hasOnboarding ? 1 : 0) - (a.hasOnboarding ? 1 : 0));
-
         let renderRows = (list, bodyId, totalId) => {
             let html = "", totalVal = 0;
             if(list.length === 0) html = "<tr><td colspan='4' style='color:#999; text-align:center;'>No Items</td></tr>";
@@ -364,7 +259,6 @@
                 let badge = "";
                 if(item.isEntitlement) badge = " <span class='badge-included'>Included</span>";
                 if(item.isExcess) badge = " <span class='badge-excess'>Excess</span>";
-                
                 html += `<tr><td>${item.name}${badge}</td><td class="col-qty">${item.qty}</td>
                          <td class="col-money">$${item.price.toFixed(2)}</td><td class="col-money">$${lineTotal.toFixed(2)}</td></tr>`;
             });
@@ -376,55 +270,59 @@
     }
 
     function handleSaveAndFinish() {
-        if(!dealRecord) { alert("Deal data not loaded. Please wait."); return; }
-        if(!confirm("Proceed with this Quote?")) return;
+        if(!dealRecord) { alert("Data not loaded"); return; }
+        if(!confirm("Proceed?")) return;
+        showLoader(true, "Debug: Generating PDF...");
 
-        showLoader(true, "Generating PDF...");
         let element = document.getElementById('quoteContainer');
-        let filename = (dealRecord.Deal_Name || "Quote").replace(/[^a-z0-9]/gi, '_') + " - V1.pdf";
+        // DEBUG: Simple filename to rule out path issues
+        let filename = "Quote_Preview.pdf";
         
         let opt = { margin: 0.5, filename: filename, image: { type: 'jpeg', quality: 0.98 },
                     html2canvas: { scale: 2 }, jsPDF: { unit: 'in', format: 'letter' } };
 
         html2pdf().set(opt).from(element).outputPdf('blob').then(function(blob) {
+            console.log("PDF Blob Generated:", blob);
+            console.log("Blob Size:", blob.size);
+            console.log("Blob Type:", blob.type);
             uploadToCRM(blob, filename);
         });
     }
 
     function uploadToCRM(blob, filename) {
-        document.getElementById("loaderText").innerText = "Uploading PDF...";
+        document.getElementById("loaderText").innerText = "Uploading (Check Console)...";
         
-        // FIXED PAYLOAD: USE 'file' KEY INSTEAD OF 'file_obj'
+        // DEBUG: Verify File Object Creation
         var file = new File([blob], filename, { type: "application/pdf" });
+        console.log("File Object created:", file);
+        
         ZOHO.CRM.API.attachFile({ 
             Entity: "Deals", 
             RecordID: dealId, 
             File: { file: file } 
         })
-        .then(function() {
+        .then(function(data) {
+            console.log("Upload Success Data:", data);
             document.getElementById("loaderText").innerText = "Advancing Blueprint...";
             ZOHO.CRM.BLUEPRINT.proceed({ transition_id: PROCEED_TRANSITION_NAME, data: {} })
             .then(function() { ZOHO.CRM.UI.Popup.closeReload(); });
         })
         .catch(function(err) { 
-            alert("Error: " + JSON.stringify(err)); 
+            console.error("Upload Error:", err);
+            alert("Upload Error (See Console): " + JSON.stringify(err));
             showLoader(false); 
         });
     }
 
     function handleStartOver() {
         if(!dealRecord) return;
-        if(!confirm("Clear all data and Start Over?")) return;
-        showLoader(true, "Clearing Records...");
-        
+        if(!confirm("Start Over?")) return;
+        showLoader(true, "Clearing...");
         let updateMap = {};
         for (let key in dealRecord) {
-            if (!key.startsWith("$") && !SAFE_FIELDS.includes(key) && dealRecord[key] !== null) {
-                updateMap[key] = null;
-            }
+            if (!key.startsWith("$") && !SAFE_FIELDS.includes(key) && dealRecord[key] !== null) { updateMap[key] = null; }
         }
         updateMap["Phone_Hardware"] = []; 
-        
         ZOHO.CRM.API.updateRecord({ Entity: "Deals", APIData: { id: dealId, ...updateMap } })
         .then(function() {
             ZOHO.CRM.BLUEPRINT.proceed({ transition_id: RESTART_TRANSITION_NAME, data: {} })
