@@ -3,7 +3,23 @@
 <head>
     <meta charset="UTF-8">
     <title>Quote Preview & Gatekeeper</title>
-    <script src="https://live.zwidgets.com/js-sdk/1.2/ZohoEmbededAppSDK.min.js"></script>
+    
+    <script>
+        // Intercept setImmediate messages to prevent crashing Zoho SDK
+        (function() {
+            var originalPostMessage = window.postMessage;
+            window.postMessage = function(message, targetOrigin, transfer) {
+                if (typeof message === 'string' && message.indexOf('setImmediate') > -1) {
+                    // Block this specific message from the PDF library
+                    // console.log("Blocked rogue setImmediate message");
+                    return;
+                }
+                return originalPostMessage.apply(window, arguments);
+            };
+        })();
+    </script>
+
+    <script src="https://live.zwidgets.com/js-sdk/1.1/ZohoEmbededAppSDK.min.js"></script>
     
     <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
@@ -63,14 +79,13 @@
         <button class="btn-restart" onclick="handleStartOver()">&#8634; Start Over</button>
         <button class="btn-save" id="btnSave" onclick="handleSaveAndFinish()"><span>Save PDF & Finish</span> <span>&#10140;</span></button>
     </div>
-    <div class="version-footer">Widget Version: V16 (Connection Invoke)</div>
+    <div class="version-footer">Widget Version: V17 (Message Guard)</div>
 </div>
 
 <script>
     // --- 1. CONFIGURATION ---
     const RESTART_TRANSITION_NAME = "Solution Design"; 
     const PROCEED_TRANSITION_NAME = "Proceed"; 
-    const CONNECTION_NAME = "crmapi";
 
     const ID_MAP = {
         "DID_LOCAL": "1231536000013261029", "DID_TF": "1231536000013261030",
@@ -127,7 +142,9 @@
         }
     });
 
-    ZOHO.embeddedApp.init();
+    ZOHO.embeddedApp.init().then(function(){
+        console.log("Zoho SDK Initialized");
+    });
 
     function initWidget() {
         document.getElementById("dateDisplay").innerText = "Date: " + new Date().toLocaleDateString();
@@ -166,7 +183,7 @@
         );
         await Promise.all(fetchPromises);
 
-        // Build MRC
+        // Build Lines
         for(let field in MRC_CONFIG) {
             let val = getVal(field);
             let qty = (val === "Yes" || val === true) ? 1 : parseFloat(val || 0);
@@ -175,8 +192,6 @@
                 lineItems.mrc.push({ name: priceMap[ID_MAP[key]].name, qty: qty, price: priceMap[ID_MAP[key]].price, hasOnboarding: (SETUP_CONFIG[field] !== undefined) });
             }
         }
-
-        // Build Setup
         for(let field in SETUP_CONFIG) {
             let qty = parseFloat(getVal(field) || 0);
             let key = SETUP_CONFIG[field];
@@ -184,17 +199,13 @@
                 lineItems.nrc.push({ name: priceMap[ID_MAP[key]].name + " (Setup)", qty: qty, price: priceMap[ID_MAP[key]].price });
             }
         }
-
-        // Build Entitlements
         let remEnt = parseFloat(getVal("TN_Entitlements") || 0);
         ENTITLEMENT_LIST.forEach(item => {
             let qty = parseFloat(getVal(item.field) || 0);
             let prodId = ID_MAP[item.key];
             if(qty > 0 && prodId && priceMap[prodId]) {
                 let freeQty = 0, paidQty = 0;
-                if(qty <= remEnt) { freeQty = qty; remEnt -= qty; } 
-                else { freeQty = remEnt; paidQty = qty - remEnt; remEnt = 0; }
-                
+                if(qty <= remEnt) { freeQty = qty; remEnt -= qty; } else { freeQty = remEnt; paidQty = qty - remEnt; remEnt = 0; }
                 let pName = priceMap[prodId].name;
                 if(freeQty > 0) {
                     lineItems.mrc.push({ name: pName, qty: freeQty, price: 0, isEntitlement: true, hasOnboarding: false });
@@ -206,16 +217,12 @@
                 }
             }
         });
-
-        // Build Bundles
         let tfMinutes = parseFloat(getVal("Est_Toll_Free_Minutes") || 0);
         if(tfMinutes > 0 && ID_MAP["TF_BUNDLE"] && priceMap[ID_MAP["TF_BUNDLE"]]) {
             let qty = Math.ceil(tfMinutes / 500);
             let p = priceMap[ID_MAP["TF_BUNDLE"]];
             lineItems.mrc.push({ name: p.name + ` (${tfMinutes} min)`, qty: qty, price: p.price, hasOnboarding: false });
         }
-
-        // Build Hardware
         phoneSubform.forEach(row => {
             let pid = row.Phone_Selection ? row.Phone_Selection.id : null;
             let qty = parseFloat(row.Phone_Qty || 0);
@@ -223,8 +230,6 @@
                 lineItems.nrc.push({ name: priceMap[pid].name, qty: qty, price: priceMap[pid].price });
             }
         });
-
-        // Build Labor
         let analogCount = parseFloat(getVal("Analog_Line_Count")||0) + parseFloat(getVal("POTS_for_Paging_Qty")||0) + parseFloat(getVal("T_38_Fax")||0);
         if(analogCount > 0 && ID_MAP["SITE_SURVEY"] && priceMap[ID_MAP["SITE_SURVEY"]]) {
             let p = priceMap[ID_MAP["SITE_SURVEY"]];
@@ -265,7 +270,7 @@
         renderRows(lineItems.nrc, "nrcBody", "totalNrcDisplay");
     }
 
-    // --- 6. CONNECTION UPLOAD ---
+    // --- 6. UPLOAD VIA SDK 1.1 ---
     async function handleSaveAndFinish() {
         if(!dealRecord) { alert("Data not loaded"); return; }
         if(!confirm("Proceed?")) return;
@@ -274,18 +279,20 @@
         try {
             const { jsPDF } = window.jspdf;
             let element = document.getElementById('quoteContainer');
+            
+            // Create Canvas
             let canvas = await html2canvas(element, { scale: 2 });
             let imgData = canvas.toDataURL('image/jpeg', 0.98);
 
+            // Create PDF
             let pdf = new jsPDF({ orientation: 'p', unit: 'in', format: 'letter' });
             let imgProps = pdf.getImageProperties(imgData);
             let pdfWidth = 8.5 - 1.0; 
             let pdfHeight = (imgProps.height * pdfWidth) / imgProps.width;
             pdf.addImage(imgData, 'JPEG', 0.5, 0.5, pdfWidth, pdfHeight);
+            
             let blob = pdf.output('blob');
-            let filename = "Quote_Preview.pdf";
-
-            uploadViaConnection(blob, filename);
+            uploadToCRM(blob, "Quote_Preview.pdf");
 
         } catch (e) {
             console.error(e);
@@ -294,55 +301,37 @@
         }
     }
 
-    function uploadViaConnection(blob, filename) {
-        document.getElementById("loaderText").innerText = "Uploading via " + CONNECTION_NAME + "...";
-
-        // Convert Blob to File
-        var file = new File([blob], filename, { type: "application/pdf" });
-
-        // IMPORTANT: Invoke uses a different structure for Multipart
-        // We must pass the "Files" object, but some widgets SDK versions parse "parameters" instead
+    function uploadToCRM(blob, filename) {
+        document.getElementById("loaderText").innerText = "Uploading...";
         
-        var formData = new FormData();
-        formData.append("file", file);
+        let file = new File([blob], filename, { type: "application/pdf" });
 
-        // NOTE: ZOHO.CRM.CONNECTION.invoke has known issues with direct file/blob passing in some environments.
-        // We will try the "files" property which is specific to this method.
-        
-        ZOHO.CRM.CONNECTION.invoke(CONNECTION_NAME, {
-            url: "https://www.zohoapis.com/crm/v2/Deals/" + dealId + "/Attachments",
-            method: "POST",
-            param_type: 2, // 1=Query, 2=Form
-            files: { file: file } // Special key for invoke file upload
+        // Using standard SDK attachFile
+        // Note: With the message guard in place, this should now work cleanly
+        ZOHO.CRM.API.attachFile({ 
+            Entity: "Deals", 
+            RecordID: dealId, 
+            File: { file: file } 
         })
         .then(function(data) {
-            console.log("Connection Success:", data);
-            if(data.code === "SUCCESS" || (data.details && data.details.status === "success")) {
-                document.getElementById("loaderText").innerText = "Advancing Blueprint...";
-                ZOHO.CRM.BLUEPRINT.proceed({ transition_id: PROCEED_TRANSITION_NAME, data: {} })
-                .then(function() { ZOHO.CRM.UI.Popup.closeReload(); });
+            console.log("Upload Success:", data);
+            document.getElementById("loaderText").innerText = "Advancing Blueprint...";
+            ZOHO.CRM.BLUEPRINT.proceed({ transition_id: PROCEED_TRANSITION_NAME, data: {} })
+            .then(function() { ZOHO.CRM.UI.Popup.closeReload(); });
+        })
+        .catch(function(err) { 
+            console.error("Upload Error:", err);
+            // Fallback for older formats
+            if(err && JSON.stringify(err).indexOf("INVALID_DATA") > -1) {
+                 console.log("Retrying with file_obj...");
+                 ZOHO.CRM.API.attachFile({ Entity: "Deals", RecordID: dealId, File: { file_obj: file } })
+                 .then(function(){
+                     ZOHO.CRM.BLUEPRINT.proceed({ transition_id: PROCEED_TRANSITION_NAME, data: {} }).then(() => ZOHO.CRM.UI.Popup.closeReload());
+                 });
             } else {
-                 throw new Error(JSON.stringify(data));
+                alert("Upload Failed: " + JSON.stringify(err));
+                showLoader(false);
             }
-        })
-        .catch(function(err) {
-            console.error("Connection Error:", err);
-            // Fallback: Try one last time with simple Attachments API wrapper if Connection fails
-            alert("Connection Upload Failed. Trying Fallback...\n" + JSON.stringify(err));
-            uploadFallback(file);
-        });
-    }
-
-    function uploadFallback(file) {
-        // Last resort: Simple Attachments wrapper again (sometimes works after connection auth primes the session)
-        ZOHO.CRM.API.attachFile({ Entity: "Deals", RecordID: dealId, File: { file: file } })
-        .then(function(data){
-             ZOHO.CRM.BLUEPRINT.proceed({ transition_id: PROCEED_TRANSITION_NAME, data: {} })
-             .then(function() { ZOHO.CRM.UI.Popup.closeReload(); });
-        })
-        .catch(function(err){
-             alert("Final Failure. Please contact admin.");
-             showLoader(false);
         });
     }
 
