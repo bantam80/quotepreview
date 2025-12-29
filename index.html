@@ -69,13 +69,11 @@
         <button class="btn-restart" onclick="handleStartOver()">&#8634; Start Over</button>
         <button class="btn-save" id="btnSave" onclick="handleSaveAndFinish()"><span>Download PDF & Finish</span> <span>&#10140;</span></button>
     </div>
-    <div class="version-footer">Widget Version: V30 (Smart Transition)</div>
+    <div class="version-footer">Widget Version: V31 (API & Blueprint Fix)</div>
 </div>
 
 <script>
     // --- 1. CONFIGURATION ---
-    
-    // TARGET TRANSITION NAMES (Case Insensitive)
     const TRANSITION_NAME_RESTART = "Solution Design"; 
     const TRANSITION_NAME_PROCEED = "Proceed"; 
 
@@ -93,7 +91,7 @@
     };
 
     const SAFE_FIELDS = [
-        "Contact_Name", // PROTECTED FIELD
+        "Contact_Name", // Field to preserve
         "Form_Update_Key", "VoiceOS_Other", "Questionnaire_Link", "Opp_Created_Time",
         "Deal_Name", "Pipeline", "Stage", "Closing_Date", "Account_Name", "Owner", 
         "Probability", "End_Customer", "Next_Step", "id", "Created_Time", 
@@ -282,7 +280,7 @@
             let filename = "Quote_Preview_" + (dealRecord.Deal_Name || "Deal").replace(/[^a-z0-9]/gi, '_') + ".pdf";
             pdf.save(filename);
             
-            // 2. Advance Blueprint (Dynamic Lookup)
+            // 2. Advance Blueprint
             document.getElementById("loaderText").innerText = "Advancing Blueprint...";
             setTimeout(function() {
                 findAndExecuteTransition(TRANSITION_NAME_PROCEED);
@@ -306,12 +304,12 @@
             if (!key.startsWith("$") && !SAFE_FIELDS.includes(key) && dealRecord[key] !== null) { updateMap[key] = null; }
         }
         updateMap["Phone_Hardware"] = []; 
-        updateMap["Stage"] = "Qualification"; // Explicit Stage Reset
+        // REMOVED STAGE UPDATE - Can only update via transition
         
         ZOHO.CRM.API.updateRecord({ Entity: "Deals", APIData: { id: dealId, ...updateMap } })
         .then(function() {
             document.getElementById("loaderText").innerText = "Resetting Stage...";
-            // Use Dynamic Lookup for Start Over
+            // Search for "Solution Design" Transition
             findAndExecuteTransition(TRANSITION_NAME_RESTART);
         })
         .catch(function(err){
@@ -320,37 +318,46 @@
         });
     }
 
-    // --- 8. SMART TRANSITION ENGINE ---
+    // --- 8. SMART TRANSITION ENGINE (Corrected SDK Call) ---
     function findAndExecuteTransition(targetName) {
-        ZOHO.CRM.BLUEPRINT.getStatus({ Entity: "Deals", RecordID: dealId })
+        // CORRECTED: Using getBlueprint (not getStatus)
+        ZOHO.CRM.API.getBlueprint({ Entity: "Deals", RecordID: dealId })
         .then(function(data) {
-            if(data && data.transitions) {
-                let match = data.transitions.find(t => t.name.toLowerCase() === targetName.toLowerCase());
+            console.log("Blueprint Data:", data);
+            
+            if(data && data.blueprint && data.blueprint.transitions) {
+                let match = data.blueprint.transitions.find(t => t.name.toLowerCase() === targetName.toLowerCase());
+                
                 if(match) {
                     console.log("Found Transition:", match.name, match.id);
                     ZOHO.CRM.BLUEPRINT.proceed({ transition_id: match.id, data: {} })
                     .then(function() { 
-                         // REFRESH: Close popup, then force navigation reload
+                         // REFRESH STRATEGY
                          ZOHO.CRM.UI.Popup.closeReload().then(function(){
+                              // Fallback force reload if closeReload doesn't trigger parent refresh fast enough
                               setTimeout(function(){
-                                  // This forces the parent window to reload the record page
                                   ZOHO.CRM.UI.Record.open({ Entity: "Deals", RecordID: dealId });
                               }, 500);
                          });
                     });
                 } else {
-                    let available = data.transitions.map(t => t.name).join(", ");
-                    alert(`Could not find transition '${targetName}'.\nAvailable options: ${available}\n\n(The record has been updated, please close and check the stage manually).`);
+                    let available = data.blueprint.transitions.map(t => t.name).join(", ");
+                    alert(`Could not find transition '${targetName}'.\nAvailable options: ${available}\n\n(The record fields were cleared, but stage update requires manual selection).`);
                     showLoader(false);
                 }
             } else {
-                alert("No Blueprint transitions available for this record.");
+                alert("No Blueprint transitions available for this record (It might not be in a Blueprint state).");
                 showLoader(false);
             }
         })
         .catch(function(err) {
             console.error("Blueprint Error:", err);
-            alert("Blueprint Error:\n" + JSON.stringify(err));
+            // Specifically catch the "Record not in blueprint" error to handle gracefully
+            if (JSON.stringify(err).indexOf("not in blueprint") > -1) {
+                 alert("This record is not currently in a Blueprint state, so the stage transition cannot be automated.");
+            } else {
+                 alert("Blueprint Error:\n" + JSON.stringify(err));
+            }
             showLoader(false);
         });
     }
