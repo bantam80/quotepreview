@@ -1,118 +1,352 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <style>
-        body { font-family: monospace; padding: 20px; background: #222; color: #0f0; }
-        button { padding: 10px 20px; margin: 5px; cursor: pointer; background: #444; color: #fff; border: 1px solid #666; }
-        button:hover { background: #666; }
-        #log { margin-top: 20px; white-space: pre-wrap; border-top: 1px solid #444; padding-top: 10px; }
-        .success { color: #0f0; }
-        .error { color: #f55; }
-        .info { color: #ccf; }
-    </style>
+    <meta charset="UTF-8">
+    <title>Quote Preview & Gatekeeper</title>
+    
+    <script>
+        window.setImmediate = window.setImmediate || function(fn) { return window.setTimeout(fn, 0); };
+        window.clearImmediate = window.clearImmediate || function(id) { window.clearTimeout(id); };
+    </script>
+
     <script src="https://live.zwidgets.com/js-sdk/1.1/ZohoEmbededAppSDK.min.js"></script>
+    
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+
+    <style>
+        body { font-family: 'Segoe UI', Arial, sans-serif; background-color: #f4f5f7; padding: 20px; color: #333; }
+        .container { max-width: 900px; margin: 0 auto; background: #fff; padding: 30px; border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.1); }
+        .header { display: flex; justify-content: space-between; align-items: center; border-bottom: 2px solid #eee; padding-bottom: 20px; margin-bottom: 20px; }
+        .header h2 { margin: 0; color: #2c3e50; }
+        .doc-info { text-align: right; font-size: 14px; color: #777; }
+        .section-title { font-size: 16px; font-weight: bold; margin: 20px 0 10px; color: #444; text-transform: uppercase; letter-spacing: 0.5px; border-bottom: 1px solid #ddd; padding-bottom: 5px; }
+        table { width: 100%; border-collapse: collapse; margin-bottom: 10px; font-size: 14px; }
+        th { background: #f8f9fa; color: #555; text-align: left; padding: 10px; border-bottom: 2px solid #ddd; font-weight: 600; }
+        td { padding: 10px; border-bottom: 1px solid #eee; }
+        .col-qty { width: 60px; text-align: center; }
+        .col-money { width: 100px; text-align: right; }
+        .total-row td { font-weight: bold; background-color: #fdfdfd; border-top: 2px solid #ddd; color: #000; }
+        .badge-included { background: #e6f4ea; color: #1e7e34; padding: 2px 6px; border-radius: 4px; font-size: 11px; font-weight: bold; }
+        .badge-excess { background: #fff3cd; color: #856404; padding: 2px 6px; border-radius: 4px; font-size: 11px; font-weight: bold; }
+        .action-bar { margin-top: 30px; padding-top: 20px; border-top: 2px solid #eee; display: flex; justify-content: space-between; align-items: center; }
+        button { padding: 12px 24px; border: none; border-radius: 5px; font-size: 15px; font-weight: bold; cursor: pointer; transition: background 0.2s; }
+        .btn-restart { background-color: #fff; border: 2px solid #dc3545; color: #dc3545; }
+        .btn-restart:hover { background-color: #dc3545; color: white; }
+        .btn-save { background-color: #28a745; color: white; display: flex; align-items: center; gap: 8px; }
+        .btn-save:hover { background-color: #218838; }
+        #loader { display: none; position: fixed; top:0; left:0; width:100%; height:100%; background: rgba(255,255,255,0.8); z-index: 999; text-align: center; padding-top: 200px; }
+        .spinner { border: 4px solid #f3f3f3; border-top: 4px solid #3498db; border-radius: 50%; width: 40px; height: 40px; animation: spin 1s linear infinite; display: inline-block; }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+        .version-footer { text-align: center; margin-top: 20px; font-size: 12px; color: #999; opacity: 0.6; }
+    </style>
 </head>
 <body>
-    <h3>Diagnostic Control Panel</h3>
-    <div id="controls">
-        <button onclick="checkCapabilities()">1. Check Capabilities</button>
-        <button onclick="testManualMultipart()">2. Test: Manual Multipart (Best Hope)</button>
-        <button onclick="testV2Endpoint()">3. Test: V2 Endpoint Legacy</button>
+
+<div id="loader"><div class="spinner"></div><h3 id="loaderText">Processing...</h3></div>
+
+<div class="container" id="quoteContainer">
+    <div class="header">
+        <h2>Quote Preview</h2>
+        <div class="doc-info"><div id="dealNameDisplay">Deal Name</div><div id="dateDisplay">Date: --/--/----</div></div>
     </div>
-    <div id="log">Waiting for user input...</div>
+    <div class="section-title">Monthly Recurring Charges (MRC)</div>
+    <table id="mrcTable">
+        <thead><tr><th>Item</th><th class="col-qty">Qty</th><th class="col-money">Rate</th><th class="col-money">Total</th></tr></thead>
+        <tbody id="mrcBody"></tbody>
+        <tfoot><tr class="total-row"><td colspan="3" style="text-align:right;">TOTAL MONTHLY:</td><td class="col-money" id="totalMrcDisplay">$0.00</td></tr></tfoot>
+    </table>
+    <div class="section-title" style="margin-top: 30px;">One-Time Charges (NRC)</div>
+    <table id="nrcTable">
+        <thead><tr><th>Item</th><th class="col-qty">Qty</th><th class="col-money">Rate</th><th class="col-money">Total</th></tr></thead>
+        <tbody id="nrcBody"></tbody>
+        <tfoot><tr class="total-row"><td colspan="3" style="text-align:right;">TOTAL ONE-TIME:</td><td class="col-money" id="totalNrcDisplay">$0.00</td></tr></tfoot>
+    </table>
+</div>
+
+<div class="container" style="margin-top: 15px; background: transparent; box-shadow: none; padding: 0;">
+    <div class="action-bar">
+        <button class="btn-restart" onclick="handleStartOver()">&#8634; Start Over</button>
+        <button class="btn-save" id="btnSave" onclick="handleSaveAndFinish()"><span>Save PDF & Finish</span> <span>&#10140;</span></button>
+    </div>
+    <div class="version-footer">Widget Version: V27 (Base64 Function)</div>
+</div>
 
 <script>
-    var dealId = null;
-    const CONNECTION_NAME = "crmapi";
+    // --- 1. CONFIGURATION ---
+    const RESTART_TRANSITION_ID = "1231536000013603103";
+    const PROCEED_TRANSITION_NAME = "Proceed"; 
+    
+    // !!! MUST MATCH YOUR CRM FUNCTION API NAME !!!
+    const FUNCTION_API_NAME = "attach_quote_pdf";
 
-    // 1. INIT
+    const ID_MAP = {
+        "DID_LOCAL": "1231536000013261029", "DID_TF": "1231536000013261030",
+        "LNP_LOCAL": "1231536000013261027", "LNP_TF": "1231536000013261028",
+        "TF_BUNDLE": "1231536000013499029",
+        "VMTRANS": "1231536000013241029", "ENHCLID": "1231536000013499025", "E911": "1231536000013499026",
+        "SIP_TRUNK": "1231536000013499027", "SIP_PRI": "1231536000013241014", "SIP_BACK": "1231536000013499028",
+        "UC_STD": "1231536000009612019", "UC_ADV": "1231536000009612022", "UC_CC": "1231536000009612025",
+        "POTS": "1231536000013241011", "WEBFAX": "1231536000013241043", "T38": "1231536000013241017",
+        "TEAMS_SIP": "1231536000013241023", "TEAMS_PBX": "1231536000013241020", "FAX_EMAIL": "1231536000013241026",
+        "ONB_ADV": "1231536000009612029", "ONB_STD": "1231536000009612028", "ONB_CC": "1231536000009612030",
+        "ONB_POTS": "1231536000013241066", "SITE_SURVEY": "1231536000013499030", "LABOR": "1231536000013235207"
+    };
+
+    const SAFE_FIELDS = [
+        "Form_Update_Key", "VoiceOS_Other", "Questionnaire_Link", "Opp_Created_Time",
+        "Deal_Name", "Pipeline", "Stage", "Closing_Date", "Account_Name", "Owner", 
+        "Probability", "End_Customer", "Next_Step", "id", "Created_Time", 
+        "Modified_Time", "Created_By", "Modified_By", "Tag", "Layout", "Wizard_Dependency"
+    ];
+
+    const MRC_CONFIG = {
+        "Voicemail_Transcription": "VMTRANS", "Enhanced_Caller_ID": "ENHCLID", "E911_Locations": "E911",
+        "SIP_Trunks_Qty": "SIP_TRUNK", "TTL_SIP_Trunks_Primary": "SIP_PRI", "TTL_SIP_Trunks_Backup": "SIP_BACK",
+        "Standard_Qty": "UC_STD", "Advanced_Qty": "UC_ADV", "Contact_Center_Qty": "UC_CC",
+        "POTS_for_Paging_Qty": "POTS", "Webfax": "WEBFAX", "T_38_Fax": "T38",
+        "MS_Teams_SIP": "TEAMS_SIP", "MS_Teams_PBX": "TEAMS_PBX", "Fax_to_Email": "FAX_EMAIL"
+    };
+
+    const SETUP_CONFIG = {
+        "Advanced_Qty": "ONB_ADV", "Standard_Qty": "ONB_STD", "Contact_Center_Qty": "ONB_CC",
+        "Analog_Line_Count": "ONB_POTS", "POTS_for_Paging_Qty": "ONB_POTS", "Webfax": "ONB_ADV",
+        "T_38_Fax": "ONB_POTS", "MS_Teams_SIP": "ONB_ADV", "MS_Teams_PBX": "ONB_ADV", "Fax_to_Email": "ONB_STD"
+    };
+
+    const ENTITLEMENT_LIST = [
+        { field: "New_DID_Qty", key: "DID_LOCAL" }, { field: "Porting_DID_Qty", key: "LNP_LOCAL" },
+        { field: "New_TFN_Qty", key: "DID_TF" }, { field: "Porting_TFN_Qty", key: "LNP_TF" }
+    ];
+    
+    const EXCESS_MRC_RATE = 1.00;
+    const EXCESS_NRC_RATE = 2.00;
+
+    // --- 2. STATE ---
+    var dealId = null;
+    var dealRecord = null;
+    var lineItems = { mrc: [], nrc: [] };
+
+    // --- 3. INIT ---
     ZOHO.embeddedApp.on("PageLoad", function(data){
         if(data && data.EntityId) {
             dealId = Array.isArray(data.EntityId) ? data.EntityId[0] : data.EntityId;
-            log("init", "Ready. Deal ID: " + dealId);
+            initWidget();
         }
     });
-    ZOHO.embeddedApp.init();
 
-    // 2. LOGGING HELPER
-    function log(type, msg) {
-        var el = document.getElementById("log");
-        var color = type === 'error' ? 'error' : (type === 'success' ? 'success' : 'info');
-        el.innerHTML += `<div class="${color}">[${type.toUpperCase()}] ${msg}</div>`;
-        console.log("[" + type.toUpperCase() + "] " + msg);
+    ZOHO.embeddedApp.init().then(function(){
+        console.log("Zoho SDK Initialized");
+    });
+
+    function initWidget() {
+        document.getElementById("dateDisplay").innerText = "Date: " + new Date().toLocaleDateString();
+        showLoader(true, "Loading Deal Data...");
+        ZOHO.CRM.API.getRecord({ Entity: "Deals", RecordID: dealId }).then(function(response){
+            if(response.data) {
+                dealRecord = response.data[0];
+                document.getElementById("dealNameDisplay").innerText = dealRecord.Deal_Name;
+                calculateQuote();
+            }
+        });
     }
 
-    // 3. CAPABILITY CHECK
-    function checkCapabilities() {
-        log("info", "Checking SDK methods...");
-        if (ZOHO.CRM.API.httpRequest) log("success", "API.httpRequest is AVAILABLE");
-        else log("error", "API.httpRequest is MISSING");
+    // --- 4. CALCULATION ---
+    async function calculateQuote() {
+        lineItems = { mrc: [], nrc: [] };
+        let productsToFetch = new Set();
+        const queue = (key) => { if(ID_MAP[key]) productsToFetch.add(ID_MAP[key]); };
+
+        for(let f in MRC_CONFIG) { if(getVal(f) > 0 || getVal(f) === "Yes") queue(MRC_CONFIG[f]); }
+        for(let f in SETUP_CONFIG) { if(getVal(f) > 0) queue(SETUP_CONFIG[f]); }
+        ENTITLEMENT_LIST.forEach(e => { if(getVal(e.field) > 0) queue(e.key); });
         
-        if (ZOHO.CRM.CONNECTION.invoke) log("success", "CONNECTION.invoke is AVAILABLE");
-        else log("error", "CONNECTION.invoke is MISSING");
+        if(getVal("Est_Toll_Free_Minutes") > 0) queue("TF_BUNDLE");
+        
+        let phoneSubform = dealRecord.Phone_Hardware || [];
+        phoneSubform.forEach(row => { if(row.Phone_Selection) productsToFetch.add(row.Phone_Selection.id); });
+        
+        queue("SITE_SURVEY"); queue("LABOR");
+
+        let priceMap = {};
+        let fetchPromises = Array.from(productsToFetch).map(id => 
+            ZOHO.CRM.API.getRecord({ Entity: "Products", RecordID: id }).then(r => {
+                if(r.data && r.data[0]) priceMap[id] = { name: r.data[0].Product_Name, price: r.data[0].Unit_Price || 0 };
+            }).catch(e => console.error(e))
+        );
+        await Promise.all(fetchPromises);
+
+        // Build MRC
+        for(let field in MRC_CONFIG) {
+            let val = getVal(field);
+            let qty = (val === "Yes" || val === true) ? 1 : parseFloat(val || 0);
+            let key = MRC_CONFIG[field];
+            if(qty > 0 && ID_MAP[key] && priceMap[ID_MAP[key]]) {
+                lineItems.mrc.push({ name: priceMap[ID_MAP[key]].name, qty: qty, price: priceMap[ID_MAP[key]].price, hasOnboarding: (SETUP_CONFIG[field] !== undefined) });
+            }
+        }
+        // Build Setup
+        for(let field in SETUP_CONFIG) {
+            let qty = parseFloat(getVal(field) || 0);
+            let key = SETUP_CONFIG[field];
+            if(qty > 0 && ID_MAP[key] && priceMap[ID_MAP[key]]) {
+                lineItems.nrc.push({ name: priceMap[ID_MAP[key]].name + " (Setup)", qty: qty, price: priceMap[ID_MAP[key]].price });
+            }
+        }
+        // Entitlements
+        let remEnt = parseFloat(getVal("TN_Entitlements") || 0);
+        ENTITLEMENT_LIST.forEach(item => {
+            let qty = parseFloat(getVal(item.field) || 0);
+            let prodId = ID_MAP[item.key];
+            if(qty > 0 && prodId && priceMap[prodId]) {
+                let freeQty = 0, paidQty = 0;
+                if(qty <= remEnt) { freeQty = qty; remEnt -= qty; } else { freeQty = remEnt; paidQty = qty - remEnt; remEnt = 0; }
+                let pName = priceMap[prodId].name;
+                if(freeQty > 0) {
+                    lineItems.mrc.push({ name: pName, qty: freeQty, price: 0, isEntitlement: true, hasOnboarding: false });
+                    lineItems.nrc.push({ name: pName, qty: freeQty, price: 0, isEntitlement: true });
+                }
+                if(paidQty > 0) {
+                    lineItems.mrc.push({ name: pName, qty: paidQty, price: EXCESS_MRC_RATE, isExcess: true, hasOnboarding: false });
+                    lineItems.nrc.push({ name: pName, qty: paidQty, price: EXCESS_NRC_RATE, isExcess: true });
+                }
+            }
+        });
+        // Bundles
+        let tfMinutes = parseFloat(getVal("Est_Toll_Free_Minutes") || 0);
+        if(tfMinutes > 0 && ID_MAP["TF_BUNDLE"] && priceMap[ID_MAP["TF_BUNDLE"]]) {
+            let qty = Math.ceil(tfMinutes / 500);
+            let p = priceMap[ID_MAP["TF_BUNDLE"]];
+            lineItems.mrc.push({ name: p.name + ` (${tfMinutes} min)`, qty: qty, price: p.price, hasOnboarding: false });
+        }
+        // Hardware
+        phoneSubform.forEach(row => {
+            let pid = row.Phone_Selection ? row.Phone_Selection.id : null;
+            let qty = parseFloat(row.Phone_Qty || 0);
+            if(pid && qty > 0 && priceMap[pid]) {
+                lineItems.nrc.push({ name: priceMap[pid].name, qty: qty, price: priceMap[pid].price });
+            }
+        });
+        // Labor
+        let analogCount = parseFloat(getVal("Analog_Line_Count")||0) + parseFloat(getVal("POTS_for_Paging_Qty")||0) + parseFloat(getVal("T_38_Fax")||0);
+        if(analogCount > 0 && ID_MAP["SITE_SURVEY"] && priceMap[ID_MAP["SITE_SURVEY"]]) {
+            let p = priceMap[ID_MAP["SITE_SURVEY"]];
+            lineItems.nrc.push({ name: p.name, qty: 1, price: p.price });
+        }
+        let totalPhones = phoneSubform.reduce((sum, r) => sum + parseFloat(r.Phone_Qty||0), 0);
+        if(getVal("On_Site_Install") === "Yes" && totalPhones > 0 && ID_MAP["LABOR"] && priceMap[ID_MAP["LABOR"]]) {
+            let p = priceMap[ID_MAP["LABOR"]];
+            let laborUnits = Math.ceil(totalPhones / 5.0);
+            lineItems.nrc.push({ name: p.name, qty: laborUnits, price: p.price });
+        }
+
+        renderTables();
+        showLoader(false);
     }
 
-    // 4. TEST: MANUAL MULTIPART CONSTRUCTION (The Strategy)
-    function testManualMultipart() {
-        if (!dealId) return log("error", "No Deal ID");
-        log("info", "Starting Manual Multipart Upload via Connection...");
+    function getVal(key) { return dealRecord[key]; }
 
-        var content = "This is a test file uploaded via Manual Multipart Construction.";
-        var fileName = "Manual_Test.txt";
-        var boundary = "----ZohoWidgetBoundary" + Math.random().toString(36).substring(2);
+    function renderTables() {
+        lineItems.mrc.sort((a, b) => (b.hasOnboarding ? 1 : 0) - (a.hasOnboarding ? 1 : 0));
+        let renderRows = (list, bodyId, totalId) => {
+            let html = "", totalVal = 0;
+            if(list.length === 0) html = "<tr><td colspan='4' style='color:#999; text-align:center;'>No Items</td></tr>";
+            list.forEach(item => {
+                let lineTotal = item.qty * item.price; totalVal += lineTotal;
+                let badge = item.isEntitlement ? " <span class='badge-included'>Included</span>" : (item.isExcess ? " <span class='badge-excess'>Excess</span>" : "");
+                html += `<tr><td>${item.name}${badge}</td><td class="col-qty">${item.qty}</td><td class="col-money">$${item.price.toFixed(2)}</td><td class="col-money">$${lineTotal.toFixed(2)}</td></tr>`;
+            });
+            document.getElementById(bodyId).innerHTML = html;
+            document.getElementById(totalId).innerText = "$" + totalVal.toFixed(2);
+        };
+        renderRows(lineItems.mrc, "mrcBody", "totalMrcDisplay");
+        renderRows(lineItems.nrc, "nrcBody", "totalNrcDisplay");
+    }
+
+    // --- 6. UPLOAD VIA SERVER-SIDE FUNCTION ---
+    async function handleSaveAndFinish() {
+        if(!dealRecord) { alert("Data not loaded"); return; }
+        if(!confirm("Proceed?")) return;
+        showLoader(true, "Generating PDF...");
+
+        try {
+            const { jsPDF } = window.jspdf;
+            let element = document.getElementById('quoteContainer');
+            
+            let canvas = await html2canvas(element, { scale: 2 });
+            let imgData = canvas.toDataURL('image/jpeg', 0.98);
+
+            let pdf = new jsPDF({ orientation: 'p', unit: 'in', format: 'letter' });
+            let imgProps = pdf.getImageProperties(imgData);
+            let pdfWidth = 8.5 - 1.0; 
+            let pdfHeight = (imgProps.height * pdfWidth) / imgProps.width;
+            pdf.addImage(imgData, 'JPEG', 0.5, 0.5, pdfWidth, pdfHeight);
+            
+            // Get pure Base64 (strip data:application/pdf;base64,)
+            let base64String = pdf.output('datauristring').split(',')[1];
+            
+            uploadViaFunction(base64String, "Quote_Preview.pdf");
+
+        } catch (e) {
+            console.error(e);
+            alert("PDF Generation Error: " + e.message);
+            showLoader(false);
+        }
+    }
+
+    function uploadViaFunction(base64Content, filename) {
+        document.getElementById("loaderText").innerText = "Uploading via Function...";
         
-        // Construct the Raw Multipart Body
-        var body = "";
-        body += "--" + boundary + "\r\n";
-        body += 'Content-Disposition: form-data; name="file"; filename="' + fileName + '"\r\n';
-        body += 'Content-Type: text/plain\r\n\r\n';
-        body += content + "\r\n";
-        body += "--" + boundary + "--";
-
-        var reqData = {
-            url: "https://www.zohoapis.com/crm/v2/Deals/" + dealId + "/Attachments",
-            method: "POST",
-            headers: {
-                "Content-Type": "multipart/form-data; boundary=" + boundary
-            },
-            param_type: 2,
-            body: body 
+        // Pass arguments exactly matching the Deluge Function signature
+        var args = {
+            "deal_id": dealId,
+            "pdf_content": base64Content,
+            "file_name": filename
         };
 
-        // Note: We send 'body' as a parameter assuming the connection handles raw bodies if configured right
-        // If this fails, we know the Connection API blocks raw bodies.
-        
-        ZOHO.CRM.CONNECTION.invoke(CONNECTION_NAME, reqData)
+        ZOHO.CRM.FUNCTIONS.execute(FUNCTION_API_NAME, args)
         .then(function(data){
-            log("info", "Response received.");
-            if (JSON.stringify(data).indexOf("SUCCESS") > -1) {
-                log("success", "UPLOAD SUCCESSFUL! We found the working method.");
-                log("info", JSON.stringify(data));
+            console.log("Function Response:", data);
+            
+            if(data.code === "success" || (data.details && data.details.output)) {
+                document.getElementById("loaderText").innerText = "Advancing Blueprint...";
+                // Use RESTART_TRANSITION_ID temporarily for testing flow, or switch to PROCEED logic
+                ZOHO.CRM.BLUEPRINT.proceed({ transition_id: PROCEED_TRANSITION_NAME, data: {} })
+                .then(function() { ZOHO.CRM.UI.Popup.closeReload(); });
             } else {
-                log("error", "API Rejected: " + JSON.stringify(data));
+                throw new Error(JSON.stringify(data));
             }
         })
         .catch(function(err){
-            log("error", "Connection Failed: " + JSON.stringify(err));
+            console.error("Function Error:", err);
+            alert("Function Upload Failed:\n" + JSON.stringify(err));
+            showLoader(false);
         });
     }
 
-    // 5. TEST: V2 LEGACY
-    function testV2Endpoint() {
-         log("info", "Testing V2 Endpoint with simple file wrapper...");
-         var file = new File(["test"], "v2_test.txt", {type: "text/plain"});
-         
-         ZOHO.CRM.CONNECTION.invoke(CONNECTION_NAME, {
-            url: "https://www.zohoapis.com/crm/v2/Deals/" + dealId + "/Attachments",
-            method: "POST",
-            param_type: 2,
-            files: { file: file }
-        })
-        .then(function(data){
-             log("info", "V2 Response: " + JSON.stringify(data));
+    function handleStartOver() {
+        if(!dealRecord) return;
+        if(!confirm("Clear all data and Start Over?")) return;
+        showLoader(true, "Clearing Records...");
+        
+        let updateMap = {};
+        for (let key in dealRecord) {
+            if (!key.startsWith("$") && !SAFE_FIELDS.includes(key) && dealRecord[key] !== null) { updateMap[key] = null; }
+        }
+        updateMap["Phone_Hardware"] = []; 
+        
+        ZOHO.CRM.API.updateRecord({ Entity: "Deals", APIData: { id: dealId, ...updateMap } })
+        .then(function() {
+            // Using the Restart ID you provided
+            ZOHO.CRM.BLUEPRINT.proceed({ transition_id: RESTART_TRANSITION_ID, data: {} })
+            .then(function() { ZOHO.CRM.UI.Popup.closeReload(); });
         });
     }
 
+    function showLoader(v, t) { 
+        document.getElementById("loader").style.display = v?"block":"none"; 
+        if(t) document.getElementById("loaderText").innerText = t; 
+    }
 </script>
 </body>
 </html>
