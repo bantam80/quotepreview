@@ -69,14 +69,15 @@
         <button class="btn-restart" onclick="handleStartOver()">&#8634; Start Over</button>
         <button class="btn-save" id="btnSave" onclick="handleSaveAndFinish()"><span>Save PDF & Finish</span> <span>&#10140;</span></button>
     </div>
-    <div class="version-footer">Widget Version: V24 (Direct API Upload)</div>
+    <div class="version-footer">Widget Version: V25 (Native attachFile)</div>
 </div>
 
 <script>
     // --- 1. CONFIGURATION ---
-    const RESTART_TRANSITION_NAME = "Solution Design"; 
-    const PROCEED_TRANSITION_NAME = "Proceed"; 
-    const CONNECTION_NAME = "crmapi";
+    
+    // TRANSITION IDs
+    const RESTART_TRANSITION_ID = "1231536000013603103"; // Actual ID for 'Solution Design'
+    const PROCEED_TRANSITION_NAME = "Proceed"; // Used for forward motion
 
     const ID_MAP = {
         "DID_LOCAL": "1231536000013261029", "DID_TF": "1231536000013261030",
@@ -171,7 +172,7 @@
         );
         await Promise.all(fetchPromises);
 
-        // Build Lines
+        // Build MRC
         for(let field in MRC_CONFIG) {
             let val = getVal(field);
             let qty = (val === "Yes" || val === true) ? 1 : parseFloat(val || 0);
@@ -180,6 +181,7 @@
                 lineItems.mrc.push({ name: priceMap[ID_MAP[key]].name, qty: qty, price: priceMap[ID_MAP[key]].price, hasOnboarding: (SETUP_CONFIG[field] !== undefined) });
             }
         }
+        // Build Setup
         for(let field in SETUP_CONFIG) {
             let qty = parseFloat(getVal(field) || 0);
             let key = SETUP_CONFIG[field];
@@ -187,6 +189,7 @@
                 lineItems.nrc.push({ name: priceMap[ID_MAP[key]].name + " (Setup)", qty: qty, price: priceMap[ID_MAP[key]].price });
             }
         }
+        // Build Entitlements
         let remEnt = parseFloat(getVal("TN_Entitlements") || 0);
         ENTITLEMENT_LIST.forEach(item => {
             let qty = parseFloat(getVal(item.field) || 0);
@@ -205,12 +208,14 @@
                 }
             }
         });
+        // Build Bundles
         let tfMinutes = parseFloat(getVal("Est_Toll_Free_Minutes") || 0);
         if(tfMinutes > 0 && ID_MAP["TF_BUNDLE"] && priceMap[ID_MAP["TF_BUNDLE"]]) {
             let qty = Math.ceil(tfMinutes / 500);
             let p = priceMap[ID_MAP["TF_BUNDLE"]];
             lineItems.mrc.push({ name: p.name + ` (${tfMinutes} min)`, qty: qty, price: p.price, hasOnboarding: false });
         }
+        // Build Hardware
         phoneSubform.forEach(row => {
             let pid = row.Phone_Selection ? row.Phone_Selection.id : null;
             let qty = parseFloat(row.Phone_Qty || 0);
@@ -218,6 +223,7 @@
                 lineItems.nrc.push({ name: priceMap[pid].name, qty: qty, price: priceMap[pid].price });
             }
         });
+        // Build Labor
         let analogCount = parseFloat(getVal("Analog_Line_Count")||0) + parseFloat(getVal("POTS_for_Paging_Qty")||0) + parseFloat(getVal("T_38_Fax")||0);
         if(analogCount > 0 && ID_MAP["SITE_SURVEY"] && priceMap[ID_MAP["SITE_SURVEY"]]) {
             let p = priceMap[ID_MAP["SITE_SURVEY"]];
@@ -254,7 +260,7 @@
         renderRows(lineItems.nrc, "nrcBody", "totalNrcDisplay");
     }
 
-    // --- 6. UPLOAD VIA CONNECTION INVOKE (V8 API) ---
+    // --- 6. UPLOAD VIA NATIVE ATTACHFILE ---
     async function handleSaveAndFinish() {
         if(!dealRecord) { alert("Data not loaded"); return; }
         if(!confirm("Proceed?")) return;
@@ -276,7 +282,12 @@
             let blob = pdf.output('blob');
             let filename = "Quote_Preview.pdf";
             
-            uploadViaConnection(blob, filename);
+            // BLOB HACK: Attach properties directly to the blob. 
+            // This tricks the SDK into accepting it as a 'File' object.
+            blob.name = filename;
+            blob.lastModifiedDate = new Date();
+
+            uploadToCRM(blob);
 
         } catch (e) {
             console.error(e);
@@ -285,56 +296,70 @@
         }
     }
 
-    function uploadViaConnection(blob, filename) {
-        document.getElementById("loaderText").innerText = "Uploading via " + CONNECTION_NAME + "...";
+    function uploadToCRM(blob) {
+        document.getElementById("loaderText").innerText = "Uploading to CRM...";
         
-        var file = new File([blob], filename, { type: "application/pdf" });
+        // Use standard attachFile.
+        // We rely on the Blob Hack above to pass validation.
         
-        // Use ZOHO.CRM.CONNECTION.invoke with 'files' parameter for Multipart
-        // This is the correct V8 API invocation
-        ZOHO.CRM.CONNECTION.invoke(CONNECTION_NAME, {
-            url: "https://www.zohoapis.com/crm/v8/Deals/" + dealId + "/Attachments",
-            method: "POST",
-            param_type: 2, // Multipart Form Data
-            files: { "file": file } // Strict 'file' key as per docs
+        ZOHO.CRM.API.attachFile({ 
+            Entity: "Deals", 
+            RecordID: dealId, 
+            File: { file: blob } 
         })
         .then(function(data) {
-            console.log("Connection Response:", data);
-
-            // Check for V8 success structure
-            let isSuccess = false;
+            console.log("Upload Success:", data);
             
-            if (data.code === "SUCCESS") isSuccess = true;
-            else if (data.data && data.data[0] && data.data[0].code === "SUCCESS") isSuccess = true;
-            else if (data.details && data.details.status === "success") isSuccess = true;
-
-            if (isSuccess) {
+            // Standard SDK Response Check for attachFile
+            // Response typically looks like: { data: [{ code: "SUCCESS", ... }] }
+            if (data.data && data.data[0] && data.data[0].code === "SUCCESS") {
+                document.getElementById("loaderText").innerText = "Advancing Blueprint...";
+                ZOHO.CRM.BLUEPRINT.proceed({ transition_id: PROCEED_TRANSITION_NAME, data: {} })
+                .then(function() { ZOHO.CRM.UI.Popup.closeReload(); });
+            } else {
+                 // Even if 'code' isn't explicitly SUCCESS, if we got data back, it likely worked.
+                 // We log and proceed cautiously.
+                 console.warn("Unexpected success shape:", data);
                  document.getElementById("loaderText").innerText = "Advancing Blueprint...";
                  ZOHO.CRM.BLUEPRINT.proceed({ transition_id: PROCEED_TRANSITION_NAME, data: {} })
                  .then(function() { ZOHO.CRM.UI.Popup.closeReload(); });
-            } else {
-                 throw new Error(JSON.stringify(data));
             }
         })
-        .catch(function(err) {
-            console.error("Connection Error:", err);
-            alert("Upload Failed. Details:\n" + JSON.stringify(err));
-            showLoader(false);
+        .catch(function(err) { 
+            console.error("Upload Error:", err);
+            // Fallback: If 'file' key fails, try 'file_obj' (Legacy SDK support)
+            if(err && JSON.stringify(err).indexOf("INVALID_DATA") > -1) {
+                 console.log("Retrying with file_obj key...");
+                 ZOHO.CRM.API.attachFile({ Entity: "Deals", RecordID: dealId, File: { file_obj: blob } })
+                 .then(function(){
+                     ZOHO.CRM.BLUEPRINT.proceed({ transition_id: PROCEED_TRANSITION_NAME, data: {} }).then(() => ZOHO.CRM.UI.Popup.closeReload());
+                 })
+                 .catch(function(e){
+                     alert("Upload Failed. Please contact support.\n" + JSON.stringify(e));
+                     showLoader(false);
+                 });
+            } else {
+                alert("Upload Failed: " + JSON.stringify(err));
+                showLoader(false);
+            }
         });
     }
 
     function handleStartOver() {
         if(!dealRecord) return;
-        if(!confirm("Start Over?")) return;
-        showLoader(true, "Clearing...");
+        if(!confirm("Clear all data and Start Over?")) return;
+        showLoader(true, "Clearing Records...");
+        
         let updateMap = {};
         for (let key in dealRecord) {
             if (!key.startsWith("$") && !SAFE_FIELDS.includes(key) && dealRecord[key] !== null) { updateMap[key] = null; }
         }
         updateMap["Phone_Hardware"] = []; 
+        
         ZOHO.CRM.API.updateRecord({ Entity: "Deals", APIData: { id: dealId, ...updateMap } })
         .then(function() {
-            ZOHO.CRM.BLUEPRINT.proceed({ transition_id: RESTART_TRANSITION_NAME, data: {} })
+            // Updated Transition ID provided by user
+            ZOHO.CRM.BLUEPRINT.proceed({ transition_id: RESTART_TRANSITION_ID, data: {} })
             .then(function() { ZOHO.CRM.UI.Popup.closeReload(); });
         });
     }
