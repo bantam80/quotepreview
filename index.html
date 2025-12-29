@@ -69,15 +69,14 @@
         <button class="btn-restart" onclick="handleStartOver()">&#8634; Start Over</button>
         <button class="btn-save" id="btnSave" onclick="handleSaveAndFinish()"><span>Download PDF & Finish</span> <span>&#10140;</span></button>
     </div>
-    <div class="version-footer">Widget Version: V28 (Download & Advance)</div>
+    <div class="version-footer">Widget Version: V29 (Refresh & Stage Fix)</div>
 </div>
 
 <script>
     // --- 1. CONFIGURATION ---
-    const RESTART_TRANSITION_ID = "1231536000013603103";
+    const RESTART_TRANSITION_ID = "1231536000013603103"; // To Qualification
     const PROCEED_TRANSITION_NAME = "Proceed"; 
-    
-    // IDs
+
     const ID_MAP = {
         "DID_LOCAL": "1231536000013261029", "DID_TF": "1231536000013261030",
         "LNP_LOCAL": "1231536000013261027", "LNP_TF": "1231536000013261028",
@@ -91,7 +90,9 @@
         "ONB_POTS": "1231536000013241066", "SITE_SURVEY": "1231536000013499030", "LABOR": "1231536000013235207"
     };
 
+    // UPDATED: Added "Contact_Name"
     const SAFE_FIELDS = [
+        "Contact_Name",
         "Form_Update_Key", "VoiceOS_Other", "Questionnaire_Link", "Opp_Created_Time",
         "Deal_Name", "Pipeline", "Stage", "Closing_Date", "Account_Name", "Owner", 
         "Probability", "End_Customer", "Next_Step", "id", "Created_Time", 
@@ -186,7 +187,7 @@
                 lineItems.nrc.push({ name: priceMap[ID_MAP[key]].name + " (Setup)", qty: qty, price: priceMap[ID_MAP[key]].price });
             }
         }
-        // Entitlements
+        // Build Entitlements
         let remEnt = parseFloat(getVal("TN_Entitlements") || 0);
         ENTITLEMENT_LIST.forEach(item => {
             let qty = parseFloat(getVal(item.field) || 0);
@@ -257,7 +258,7 @@
         renderRows(lineItems.nrc, "nrcBody", "totalNrcDisplay");
     }
 
-    // --- 6. ACTION: DOWNLOAD + ADVANCE (Robust) ---
+    // --- 6. ACTION: DOWNLOAD + ADVANCE ---
     async function handleSaveAndFinish() {
         if(!dealRecord) { alert("Data not loaded"); return; }
         if(!confirm("Proceed?")) return;
@@ -266,10 +267,8 @@
         try {
             const { jsPDF } = window.jspdf;
             let element = document.getElementById('quoteContainer');
-            
             let canvas = await html2canvas(element, { scale: 2 });
             let imgData = canvas.toDataURL('image/jpeg', 0.98);
-
             let pdf = new jsPDF({ orientation: 'p', unit: 'in', format: 'letter' });
             let imgProps = pdf.getImageProperties(imgData);
             let pdfWidth = 8.5 - 1.0; 
@@ -285,13 +284,20 @@
             setTimeout(function() {
                 ZOHO.CRM.BLUEPRINT.proceed({ transition_id: PROCEED_TRANSITION_NAME, data: {} })
                 .then(function() { 
-                    ZOHO.CRM.UI.Popup.closeReload(); 
+                    // REFRESH FIX: Close popup first, if that fails, hard navigation reload
+                    ZOHO.CRM.UI.Popup.closeReload().then(function(data){
+                        // If closeReload returns (meaning it might not have closed immediately), force a navigation reload
+                        console.log("Popup close signal sent. Ensuring refresh...");
+                        setTimeout(function(){
+                            ZOHO.CRM.UI.Record.open({ Entity: "Deals", RecordID: dealId }); 
+                        }, 500);
+                    });
                 })
                 .catch(function(err){
                     alert("PDF Downloaded.\n\nCould not auto-advance Blueprint. Please click 'Proceed' manually.");
                     showLoader(false);
                 });
-            }, 1500); // Slight delay to ensure download starts
+            }, 1500);
 
         } catch (e) {
             console.error(e);
@@ -300,6 +306,7 @@
         }
     }
 
+    // --- 7. ACTION: START OVER ---
     function handleStartOver() {
         if(!dealRecord) return;
         if(!confirm("Clear all data and Start Over?")) return;
@@ -313,8 +320,17 @@
         
         ZOHO.CRM.API.updateRecord({ Entity: "Deals", APIData: { id: dealId, ...updateMap } })
         .then(function() {
+            document.getElementById("loaderText").innerText = "Resetting Stage...";
+            // Explicitly call the Transition ID provided for Start Over
             ZOHO.CRM.BLUEPRINT.proceed({ transition_id: RESTART_TRANSITION_ID, data: {} })
-            .then(function() { ZOHO.CRM.UI.Popup.closeReload(); });
+            .then(function() { 
+                ZOHO.CRM.UI.Popup.closeReload(); 
+            })
+            .catch(function(err){
+                console.error("Blueprint Transition Failed:", err);
+                alert("Fields were cleared, but Stage Reset failed.\nReason: " + JSON.stringify(err));
+                ZOHO.CRM.UI.Popup.closeReload();
+            });
         });
     }
 
