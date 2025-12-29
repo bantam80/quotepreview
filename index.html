@@ -73,7 +73,7 @@
         <button class="btn-restart" onclick="handleStartOver()">&#8634; Start Over</button>
         <button class="btn-save" id="btnSave" onclick="handleSaveAndFinish()"><span>Save PDF & Finish</span> <span>&#10140;</span></button>
     </div>
-    <div class="version-footer">Widget Version: V8 (Syntax Fixed)</div>
+    <div class="version-footer">Widget Version: V9</div>
 </div>
 
 <script>
@@ -85,7 +85,7 @@
     const RESTART_TRANSITION_NAME = "Solution Design"; 
     const PROCEED_TRANSITION_NAME = "Proceed"; 
 
-    // ID MAP (Formatted for Safety)
+    // ID MAP
     const ID_MAP = {
         // ENTITLEMENTS (User Provided)
         "DID_LOCAL": "1231536000013261029",
@@ -127,7 +127,7 @@
         "Modified_Time", "Created_By", "Modified_By", "Tag", "Layout", "Wizard_Dependency"
     ];
 
-    // CONFIG MAPS (Formatted for Safety)
+    // CONFIG MAPS
     const MRC_CONFIG = {
         "Voicemail_Transcription": "VMTRANS", 
         "Enhanced_Caller_ID":      "ENHCLID", 
@@ -386,19 +386,30 @@
         let opt = { margin: 0.5, filename: filename, image: { type: 'jpeg', quality: 0.98 },
                     html2canvas: { scale: 2 }, jsPDF: { unit: 'in', format: 'letter' } };
 
-        html2pdf().set(opt).from(element).outputPdf('blob').then(b => uploadToCRM(b, filename));
+        html2pdf().set(opt).from(element).outputPdf('blob').then(function(blob) {
+            uploadToCRM(blob, filename);
+        });
     }
 
     function uploadToCRM(blob, filename) {
         document.getElementById("loaderText").innerText = "Uploading PDF...";
-        let file = new File([blob], filename, { type: "application/pdf" });
-        ZOHO.CRM.API.attachFile({ Entity: "Deals", RecordID: dealId, File: { file_obj: file } })
-        .then(() => {
+        
+        // FIXED PAYLOAD: USE 'file' KEY INSTEAD OF 'file_obj'
+        var file = new File([blob], filename, { type: "application/pdf" });
+        ZOHO.CRM.API.attachFile({ 
+            Entity: "Deals", 
+            RecordID: dealId, 
+            File: { file: file } 
+        })
+        .then(function() {
             document.getElementById("loaderText").innerText = "Advancing Blueprint...";
             ZOHO.CRM.BLUEPRINT.proceed({ transition_id: PROCEED_TRANSITION_NAME, data: {} })
-            .then(() => ZOHO.CRM.UI.Popup.closeReload());
+            .then(function() { ZOHO.CRM.UI.Popup.closeReload(); });
         })
-        .catch(err => { alert("Error: " + JSON.stringify(err)); showLoader(false); });
+        .catch(function(err) { 
+            alert("Error: " + JSON.stringify(err)); 
+            showLoader(false); 
+        });
     }
 
     function handleStartOver() {
@@ -415,9 +426,9 @@
         updateMap["Phone_Hardware"] = []; 
         
         ZOHO.CRM.API.updateRecord({ Entity: "Deals", APIData: { id: dealId, ...updateMap } })
-        .then(() => {
+        .then(function() {
             ZOHO.CRM.BLUEPRINT.proceed({ transition_id: RESTART_TRANSITION_NAME, data: {} })
-            .then(() => ZOHO.CRM.UI.Popup.closeReload());
+            .then(function() { ZOHO.CRM.UI.Popup.closeReload(); });
         });
     }
 
