@@ -5,8 +5,6 @@
     <title>Quote Preview & Gatekeeper</title>
     
     <script>
-        // Prevent PDF libraries from using window.postMessage for timing
-        // This stops the "SyntaxError: Unexpected token 's'" in the Zoho SDK
         window.setImmediate = window.setImmediate || function(fn) { return window.setTimeout(fn, 0); };
         window.clearImmediate = window.clearImmediate || function(id) { window.clearTimeout(id); };
     </script>
@@ -71,12 +69,14 @@
         <button class="btn-restart" onclick="handleStartOver()">&#8634; Start Over</button>
         <button class="btn-save" id="btnSave" onclick="handleSaveAndFinish()"><span>Download PDF & Finish</span> <span>&#10140;</span></button>
     </div>
-    <div class="version-footer">Widget Version: V32 (Stable Release)</div>
+    <div class="version-footer">Widget Version: V33 (Restored Auto-Advance)</div>
 </div>
 
 <script>
     // --- 1. CONFIGURATION ---
-    const RESTART_TRANSITION_ID = "1231536000013603103"; // To Qualification
+    
+    // NOTE: If "Proceed" fails, replace it with the numeric ID of the transition button.
+    const PROCEED_TRANSITION_ID = "Proceed"; 
 
     const ID_MAP = {
         "DID_LOCAL": "1231536000013261029", "DID_TF": "1231536000013261030",
@@ -90,6 +90,15 @@
         "ONB_ADV": "1231536000009612029", "ONB_STD": "1231536000009612028", "ONB_CC": "1231536000009612030",
         "ONB_POTS": "1231536000013241066", "SITE_SURVEY": "1231536000013499030", "LABOR": "1231536000013235207"
     };
+
+    const SAFE_FIELDS = [
+        "Contact_Name", // User Requested to keep
+        "VoiceOS_Other", // User Requested to keep/update
+        "Form_Update_Key", "Questionnaire_Link", "Opp_Created_Time",
+        "Deal_Name", "Pipeline", "Stage", "Closing_Date", "Account_Name", "Owner", 
+        "Probability", "End_Customer", "Next_Step", "id", "Created_Time", 
+        "Modified_Time", "Created_By", "Modified_By", "Tag", "Layout", "Wizard_Dependency"
+    ];
 
     const MRC_CONFIG = {
         "Voicemail_Transcription": "VMTRANS", "Enhanced_Caller_ID": "ENHCLID", "E911_Locations": "E911",
@@ -247,7 +256,7 @@
         renderRows(lineItems.nrc, "nrcBody", "totalNrcDisplay");
     }
 
-    // --- 6. ACTION: DOWNLOAD + ADVANCE (Fail-Safe) ---
+    // --- 6. ACTION: DOWNLOAD + ADVANCE (Restored V25 Logic) ---
     async function handleSaveAndFinish() {
         if(!dealRecord) { alert("Data not loaded"); return; }
         if(!confirm("Proceed?")) return;
@@ -268,12 +277,23 @@
             let filename = "Quote_Preview_" + (dealRecord.Deal_Name || "Deal").replace(/[^a-z0-9]/gi, '_') + ".pdf";
             pdf.save(filename);
             
-            // 2. Alert User to Proceed Manually (Best reliability)
-            alert("Quote PDF has been downloaded.\n\nPlease locate the 'Proceed' transition button in the CRM to move to the next stage.");
-            
-            ZOHO.CRM.UI.Popup.closeReload().then(function(){
-                setTimeout(function(){ ZOHO.CRM.UI.Record.open({ Entity: "Deals", RecordID: dealId }); }, 500);
-            });
+            // 2. Advance Blueprint (Using configured ID/Name)
+            document.getElementById("loaderText").innerText = "Advancing Blueprint...";
+            setTimeout(function() {
+                ZOHO.CRM.BLUEPRINT.proceed({ transition_id: PROCEED_TRANSITION_ID, data: {} })
+                .then(function() { 
+                    // REFRESH: Close popup -> Force Record Reload
+                    ZOHO.CRM.UI.Popup.closeReload().then(function(){
+                        setTimeout(function(){
+                            ZOHO.CRM.UI.Record.open({ Entity: "Deals", RecordID: dealId });
+                        }, 500);
+                    });
+                })
+                .catch(function(err){
+                    alert("PDF Downloaded.\n\nCould not auto-advance Blueprint. Please check if 'Proceed' is the correct Transition ID.");
+                    showLoader(false);
+                });
+            }, 1000);
 
         } catch (e) {
             console.error(e);
@@ -282,26 +302,44 @@
         }
     }
 
-    // --- 7. ACTION: START OVER (Direct Transition) ---
+    // --- 7. ACTION: START OVER (Update Fields only) ---
     function handleStartOver() {
         if(!dealRecord) return;
-        if(!confirm("Start Over?\n(Note: You will need to manually clear fields if required, as the record is locked in Blueprint)")) return;
+        if(!confirm("Clear all data and Start Over?")) return;
         
-        showLoader(true, "Resetting Stage...");
+        showLoader(true, "Clearing Records...");
         
-        // Directly trigger the transition ID provided
-        // We do NOT updateRecord first, to avoid 'RECORD_IN_BLUEPRINT' errors
-        ZOHO.CRM.BLUEPRINT.proceed({ transition_id: RESTART_TRANSITION_ID, data: {} })
-        .then(function() { 
-            // Close and Force Refresh
+        let updateMap = {};
+        
+        // 1. Clear Fields loop
+        for (let key in dealRecord) {
+            if (!key.startsWith("$") && !SAFE_FIELDS.includes(key) && dealRecord[key] !== null) { 
+                updateMap[key] = null; 
+            }
+        }
+        
+        // 2. Explicit Subform Clear
+        updateMap["Phone_Hardware"] = []; 
+        
+        // 3. User Request: Check this box
+        updateMap["VoiceOS_Other"] = true; 
+        
+        ZOHO.CRM.API.updateRecord({ Entity: "Deals", APIData: { id: dealId, ...updateMap } })
+        .then(function() {
+            // Success -> Close and Refresh
             ZOHO.CRM.UI.Popup.closeReload().then(function(){
                  setTimeout(function(){ ZOHO.CRM.UI.Record.open({ Entity: "Deals", RecordID: dealId }); }, 500);
             });
         })
         .catch(function(err){
-            console.error("Blueprint Error:", err);
-            alert("Could not reset stage automatically.\n\nError: " + JSON.stringify(err));
-            showLoader(false);
+             // Error Handling for Blueprint Lock
+             console.error("Update Error:", err);
+             if(JSON.stringify(err).indexOf("RECORD_IN_BLUEPRINT") > -1) {
+                 alert("Cannot reset form automatically:\n\nThe record is locked by the Blueprint. Please manually clear fields or configure 'VoiceOS_Other' as editable in the Blueprint settings.");
+             } else {
+                 alert("Error Clearing Records: " + JSON.stringify(err));
+             }
+             showLoader(false);
         });
     }
 
