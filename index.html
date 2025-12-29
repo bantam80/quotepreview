@@ -67,9 +67,9 @@
 <div class="container" style="margin-top: 15px; background: transparent; box-shadow: none; padding: 0;">
     <div class="action-bar">
         <button class="btn-restart" onclick="handleStartOver()">&#8634; Start Over</button>
-        <button class="btn-save" id="btnSave" onclick="handleSaveAndFinish()"><span>Save PDF & Finish</span> <span>&#10140;</span></button>
+        <button class="btn-save" id="btnSave" onclick="handleSaveAndFinish()"><span>Download PDF & Finish</span> <span>&#10140;</span></button>
     </div>
-    <div class="version-footer">Widget Version: V27 (Base64 Function)</div>
+    <div class="version-footer">Widget Version: V28 (Download & Advance)</div>
 </div>
 
 <script>
@@ -77,9 +77,7 @@
     const RESTART_TRANSITION_ID = "1231536000013603103";
     const PROCEED_TRANSITION_NAME = "Proceed"; 
     
-    // !!! MUST MATCH YOUR CRM FUNCTION API NAME !!!
-    const FUNCTION_API_NAME = "attach_quote_pdf";
-
+    // IDs
     const ID_MAP = {
         "DID_LOCAL": "1231536000013261029", "DID_TF": "1231536000013261030",
         "LNP_LOCAL": "1231536000013261027", "LNP_TF": "1231536000013261028",
@@ -135,9 +133,7 @@
         }
     });
 
-    ZOHO.embeddedApp.init().then(function(){
-        console.log("Zoho SDK Initialized");
-    });
+    ZOHO.embeddedApp.init();
 
     function initWidget() {
         document.getElementById("dateDisplay").innerText = "Date: " + new Date().toLocaleDateString();
@@ -160,12 +156,9 @@
         for(let f in MRC_CONFIG) { if(getVal(f) > 0 || getVal(f) === "Yes") queue(MRC_CONFIG[f]); }
         for(let f in SETUP_CONFIG) { if(getVal(f) > 0) queue(SETUP_CONFIG[f]); }
         ENTITLEMENT_LIST.forEach(e => { if(getVal(e.field) > 0) queue(e.key); });
-        
         if(getVal("Est_Toll_Free_Minutes") > 0) queue("TF_BUNDLE");
-        
         let phoneSubform = dealRecord.Phone_Hardware || [];
         phoneSubform.forEach(row => { if(row.Phone_Selection) productsToFetch.add(row.Phone_Selection.id); });
-        
         queue("SITE_SURVEY"); queue("LABOR");
 
         let priceMap = {};
@@ -246,6 +239,7 @@
 
     function getVal(key) { return dealRecord[key]; }
 
+    // --- 5. RENDER ---
     function renderTables() {
         lineItems.mrc.sort((a, b) => (b.hasOnboarding ? 1 : 0) - (a.hasOnboarding ? 1 : 0));
         let renderRows = (list, bodyId, totalId) => {
@@ -263,7 +257,7 @@
         renderRows(lineItems.nrc, "nrcBody", "totalNrcDisplay");
     }
 
-    // --- 6. UPLOAD VIA SERVER-SIDE FUNCTION ---
+    // --- 6. ACTION: DOWNLOAD + ADVANCE (Robust) ---
     async function handleSaveAndFinish() {
         if(!dealRecord) { alert("Data not loaded"); return; }
         if(!confirm("Proceed?")) return;
@@ -282,46 +276,28 @@
             let pdfHeight = (imgProps.height * pdfWidth) / imgProps.width;
             pdf.addImage(imgData, 'JPEG', 0.5, 0.5, pdfWidth, pdfHeight);
             
-            // Get pure Base64 (strip data:application/pdf;base64,)
-            let base64String = pdf.output('datauristring').split(',')[1];
+            // 1. Force Download
+            let filename = "Quote_Preview_" + (dealRecord.Deal_Name || "Deal").replace(/[^a-z0-9]/gi, '_') + ".pdf";
+            pdf.save(filename);
             
-            uploadViaFunction(base64String, "Quote_Preview.pdf");
+            // 2. Advance Blueprint
+            document.getElementById("loaderText").innerText = "Advancing Blueprint...";
+            setTimeout(function() {
+                ZOHO.CRM.BLUEPRINT.proceed({ transition_id: PROCEED_TRANSITION_NAME, data: {} })
+                .then(function() { 
+                    ZOHO.CRM.UI.Popup.closeReload(); 
+                })
+                .catch(function(err){
+                    alert("PDF Downloaded.\n\nCould not auto-advance Blueprint. Please click 'Proceed' manually.");
+                    showLoader(false);
+                });
+            }, 1500); // Slight delay to ensure download starts
 
         } catch (e) {
             console.error(e);
-            alert("PDF Generation Error: " + e.message);
+            alert("Error: " + e.message);
             showLoader(false);
         }
-    }
-
-    function uploadViaFunction(base64Content, filename) {
-        document.getElementById("loaderText").innerText = "Uploading via Function...";
-        
-        // Pass arguments exactly matching the Deluge Function signature
-        var args = {
-            "deal_id": dealId,
-            "pdf_content": base64Content,
-            "file_name": filename
-        };
-
-        ZOHO.CRM.FUNCTIONS.execute(FUNCTION_API_NAME, args)
-        .then(function(data){
-            console.log("Function Response:", data);
-            
-            if(data.code === "success" || (data.details && data.details.output)) {
-                document.getElementById("loaderText").innerText = "Advancing Blueprint...";
-                // Use RESTART_TRANSITION_ID temporarily for testing flow, or switch to PROCEED logic
-                ZOHO.CRM.BLUEPRINT.proceed({ transition_id: PROCEED_TRANSITION_NAME, data: {} })
-                .then(function() { ZOHO.CRM.UI.Popup.closeReload(); });
-            } else {
-                throw new Error(JSON.stringify(data));
-            }
-        })
-        .catch(function(err){
-            console.error("Function Error:", err);
-            alert("Function Upload Failed:\n" + JSON.stringify(err));
-            showLoader(false);
-        });
     }
 
     function handleStartOver() {
@@ -337,7 +313,6 @@
         
         ZOHO.CRM.API.updateRecord({ Entity: "Deals", APIData: { id: dealId, ...updateMap } })
         .then(function() {
-            // Using the Restart ID you provided
             ZOHO.CRM.BLUEPRINT.proceed({ transition_id: RESTART_TRANSITION_ID, data: {} })
             .then(function() { ZOHO.CRM.UI.Popup.closeReload(); });
         });
