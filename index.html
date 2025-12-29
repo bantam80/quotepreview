@@ -63,16 +63,13 @@
         <button class="btn-restart" onclick="handleStartOver()">&#8634; Start Over</button>
         <button class="btn-save" id="btnSave" onclick="handleSaveAndFinish()"><span>Save PDF & Finish</span> <span>&#10140;</span></button>
     </div>
-    <div class="version-footer">Widget Version: V14 (Connected Upload)</div>
+    <div class="version-footer">Widget Version: V15 (Multi-Strategy Upload)</div>
 </div>
 
 <script>
     // --- 1. CONFIGURATION ---
     const RESTART_TRANSITION_NAME = "Solution Design"; 
     const PROCEED_TRANSITION_NAME = "Proceed"; 
-
-    // !!! IMPORTANT: YOUR CONNECTION NAME !!!
-    const CONNECTION_NAME = "crmapi";
 
     const ID_MAP = {
         "DID_LOCAL": "1231536000013261029", "DID_TF": "1231536000013261030",
@@ -267,30 +264,29 @@
         renderRows(lineItems.nrc, "nrcBody", "totalNrcDisplay");
     }
 
-    // --- 6. UPLOAD VIA CONNECTION ---
+    // --- 6. MULTI-STRATEGY UPLOAD ---
     async function handleSaveAndFinish() {
         if(!dealRecord) { alert("Data not loaded"); return; }
         if(!confirm("Proceed?")) return;
         showLoader(true, "Generating PDF...");
 
         try {
-            // A. CAPTURE CANVAS
             const { jsPDF } = window.jspdf;
             let element = document.getElementById('quoteContainer');
-            
             let canvas = await html2canvas(element, { scale: 2 });
             let imgData = canvas.toDataURL('image/jpeg', 0.98);
 
-            // B. BUILD PDF
             let pdf = new jsPDF({ orientation: 'p', unit: 'in', format: 'letter' });
             let imgProps = pdf.getImageProperties(imgData);
             let pdfWidth = 8.5 - 1.0; 
             let pdfHeight = (imgProps.height * pdfWidth) / imgProps.width;
             pdf.addImage(imgData, 'JPEG', 0.5, 0.5, pdfWidth, pdfHeight);
             let blob = pdf.output('blob');
+            let filename = "Quote_Preview.pdf";
 
-            // C. UPLOAD
-            uploadToCRM(blob, "Quote_Preview.pdf");
+            // STRATEGY 1: Standard 'file' key
+            console.log("Strategy 1: 'file' key");
+            tryUpload({ file: new File([blob], filename, {type:"application/pdf"}) }, blob, filename, 1);
 
         } catch (e) {
             console.error(e);
@@ -299,28 +295,35 @@
         }
     }
 
-    function uploadToCRM(blob, filename) {
-        document.getElementById("loaderText").innerText = "Uploading via " + CONNECTION_NAME + "...";
+    function tryUpload(payloadObj, blob, filename, attempt) {
+        document.getElementById("loaderText").innerText = "Upload Attempt " + attempt + "...";
         
-        var file = new File([blob], filename, { type: "application/pdf" });
-        
-        // Use httpRequest WITH CONNECTION to invoke the API manually
-        ZOHO.CRM.API.httpRequest({
-            url: "https://www.zohoapis.com/crm/v2/Deals/" + dealId + "/Attachments",
-            method: "POST",
-            connection_link_name: CONNECTION_NAME, // <--- THE KEY FIX
-            files: { file: file }
+        ZOHO.CRM.API.attachFile({ 
+            Entity: "Deals", 
+            RecordID: dealId, 
+            File: payloadObj 
         })
         .then(function(data) {
-            console.log("API Upload Success:", data);
+            console.log("Success on Attempt " + attempt, data);
             document.getElementById("loaderText").innerText = "Advancing Blueprint...";
             ZOHO.CRM.BLUEPRINT.proceed({ transition_id: PROCEED_TRANSITION_NAME, data: {} })
             .then(function() { ZOHO.CRM.UI.Popup.closeReload(); });
         })
-        .catch(function(err) { 
-            console.error("API Upload Error:", err);
-            alert("Upload Failed. Check Connection.\n" + JSON.stringify(err));
-            showLoader(false); 
+        .catch(function(err) {
+            console.error("Attempt " + attempt + " Failed:", err);
+            
+            if(attempt === 1) {
+                // STRATEGY 2: Legacy 'file_obj' key
+                console.log("Strategy 2: 'file_obj' key");
+                tryUpload({ file_obj: new File([blob], filename, {type:"application/pdf"}) }, blob, filename, 2);
+            } else if (attempt === 2) {
+                // STRATEGY 3: List Wrapper (Common in older SDKs)
+                console.log("Strategy 3: List Wrapper");
+                tryUpload({ file: [new File([blob], filename, {type:"application/pdf"})] }, blob, filename, 3);
+            } else {
+                alert("All upload strategies failed. Please contact support.\n" + JSON.stringify(err));
+                showLoader(false);
+            }
         });
     }
 
