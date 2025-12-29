@@ -19,7 +19,11 @@
         .container { max-width: 900px; margin: 0 auto; background: #fff; padding: 30px; border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.1); }
         .header { display: flex; justify-content: space-between; align-items: center; border-bottom: 2px solid #eee; padding-bottom: 20px; margin-bottom: 20px; }
         .header h2 { margin: 0; color: #2c3e50; }
+        
+        /* Updated Header Styles for Quote Ref */
         .doc-info { text-align: right; font-size: 14px; color: #777; }
+        .quote-ref { font-weight: bold; color: #444; margin-bottom: 4px; font-size: 15px; }
+
         .section-title { font-size: 16px; font-weight: bold; margin: 20px 0 10px; color: #444; text-transform: uppercase; letter-spacing: 0.5px; border-bottom: 1px solid #ddd; padding-bottom: 5px; }
         table { width: 100%; border-collapse: collapse; margin-bottom: 10px; font-size: 14px; }
         th { background: #f8f9fa; color: #555; text-align: left; padding: 10px; border-bottom: 2px solid #ddd; font-weight: 600; }
@@ -48,7 +52,11 @@
 <div class="container" id="quoteContainer">
     <div class="header">
         <h2>Quote Preview</h2>
-        <div class="doc-info"><div id="dealNameDisplay">Deal Name</div><div id="dateDisplay">Date: --/--/----</div></div>
+        <div class="doc-info">
+            <div id="dealNameDisplay">Deal Name</div>
+            <div id="quoteIdDisplay" class="quote-ref">Quote: --</div>
+            <div id="dateDisplay">Date: --/--/----</div>
+        </div>
     </div>
     <div class="section-title">Monthly Recurring Charges (MRC)</div>
     <table id="mrcTable">
@@ -69,7 +77,7 @@
         <button class="btn-restart" onclick="handleStartOver()">&#8634; Start Over</button>
         <button class="btn-save" id="btnSave" onclick="handleSaveAndFinish()"><span>Download PDF & Finish</span> <span>&#10140;</span></button>
     </div>
-    <div class="version-footer">Widget Version: V33 (Restored Auto-Advance)</div>
+    <div class="version-footer">Widget Version: V34 (Site Survey Fix + Quote ID)</div>
 </div>
 
 <script>
@@ -92,12 +100,13 @@
     };
 
     const SAFE_FIELDS = [
-        "Contact_Name", // User Requested to keep
-        "VoiceOS_Other", // User Requested to keep/update
+        "Contact_Name", 
+        "VoiceOS_Other", 
         "Form_Update_Key", "Questionnaire_Link", "Opp_Created_Time",
         "Deal_Name", "Pipeline", "Stage", "Closing_Date", "Account_Name", "Owner", 
         "Probability", "End_Customer", "Next_Step", "id", "Created_Time", 
-        "Modified_Time", "Created_By", "Modified_By", "Tag", "Layout", "Wizard_Dependency"
+        "Modified_Time", "Created_By", "Modified_By", "Tag", "Layout", "Wizard_Dependency",
+        "Survey_Required" // Added to safe fields so it doesn't clear on reset if needed
     ];
 
     const MRC_CONFIG = {
@@ -118,7 +127,7 @@
         { field: "New_DID_Qty", key: "DID_LOCAL" }, { field: "Porting_DID_Qty", key: "LNP_LOCAL" },
         { field: "New_TFN_Qty", key: "DID_TF" }, { field: "Porting_TFN_Qty", key: "LNP_TF" }
     ];
-    
+
     const EXCESS_MRC_RATE = 1.00;
     const EXCESS_NRC_RATE = 2.00;
 
@@ -140,8 +149,16 @@
     });
 
     function initWidget() {
+        // Generate Quote Ref: Quote: {Last4digits of QuoteID/DealID + Timestamp}
+        if(dealId) {
+            let shortId = String(dealId).slice(-4);
+            let ts = Date.now(); // Current timestamp
+            document.getElementById("quoteIdDisplay").innerText = "Quote: " + shortId + ts;
+        }
+
         document.getElementById("dateDisplay").innerText = "Date: " + new Date().toLocaleDateString();
         showLoader(true, "Loading Deal Data...");
+        
         ZOHO.CRM.API.getRecord({ Entity: "Deals", RecordID: dealId }).then(function(response){
             if(response.data) {
                 dealRecord = response.data[0];
@@ -159,11 +176,15 @@
 
         for(let f in MRC_CONFIG) { if(getVal(f) > 0 || getVal(f) === "Yes") queue(MRC_CONFIG[f]); }
         for(let f in SETUP_CONFIG) { if(getVal(f) > 0) queue(SETUP_CONFIG[f]); }
+        
         ENTITLEMENT_LIST.forEach(e => { if(getVal(e.field) > 0) queue(e.key); });
         if(getVal("Est_Toll_Free_Minutes") > 0) queue("TF_BUNDLE");
+        
         let phoneSubform = dealRecord.Phone_Hardware || [];
         phoneSubform.forEach(row => { if(row.Phone_Selection) productsToFetch.add(row.Phone_Selection.id); });
-        queue("SITE_SURVEY"); queue("LABOR");
+        
+        queue("SITE_SURVEY"); 
+        queue("LABOR");
 
         let priceMap = {};
         let fetchPromises = Array.from(productsToFetch).map(id => 
@@ -171,6 +192,7 @@
                 if(r.data && r.data[0]) priceMap[id] = { name: r.data[0].Product_Name, price: r.data[0].Unit_Price || 0 };
             }).catch(e => console.error(e))
         );
+
         await Promise.all(fetchPromises);
 
         // Build Lines
@@ -189,6 +211,7 @@
                 lineItems.nrc.push({ name: priceMap[ID_MAP[key]].name + " (Setup)", qty: qty, price: priceMap[ID_MAP[key]].price });
             }
         }
+        
         let remEnt = parseFloat(getVal("TN_Entitlements") || 0);
         ENTITLEMENT_LIST.forEach(item => {
             let qty = parseFloat(getVal(item.field) || 0);
@@ -207,12 +230,14 @@
                 }
             }
         });
+
         let tfMinutes = parseFloat(getVal("Est_Toll_Free_Minutes") || 0);
         if(tfMinutes > 0 && ID_MAP["TF_BUNDLE"] && priceMap[ID_MAP["TF_BUNDLE"]]) {
             let qty = Math.ceil(tfMinutes / 500);
             let p = priceMap[ID_MAP["TF_BUNDLE"]];
             lineItems.mrc.push({ name: p.name + ` (${tfMinutes} min)`, qty: qty, price: p.price, hasOnboarding: false });
         }
+
         phoneSubform.forEach(row => {
             let pid = row.Phone_Selection ? row.Phone_Selection.id : null;
             let qty = parseFloat(row.Phone_Qty || 0);
@@ -220,11 +245,21 @@
                 lineItems.nrc.push({ name: priceMap[pid].name, qty: qty, price: priceMap[pid].price });
             }
         });
-        let analogCount = parseFloat(getVal("Analog_Line_Count")||0) + parseFloat(getVal("POTS_for_Paging_Qty")||0) + parseFloat(getVal("T_38_Fax")||0);
-        if(analogCount > 0 && ID_MAP["SITE_SURVEY"] && priceMap[ID_MAP["SITE_SURVEY"]]) {
+
+        // --- UPDATED SITE SURVEY LOGIC ---
+        // Trigger ONLY if POTS_for_Paging_Qty > 0 OR Survey_Required == "Yes"
+        let pagingQty = parseFloat(getVal("POTS_for_Paging_Qty") || 0);
+        let surveyReq = getVal("Survey_Required"); // Expecting dropdown value "Yes" or "No"
+        
+        // Use case-insensitive check for the text "yes" to be safe
+        let isSurveyNeeded = (pagingQty > 0) || (surveyReq && String(surveyReq).toLowerCase() === "yes");
+
+        if(isSurveyNeeded && ID_MAP["SITE_SURVEY"] && priceMap[ID_MAP["SITE_SURVEY"]]) {
             let p = priceMap[ID_MAP["SITE_SURVEY"]];
             lineItems.nrc.push({ name: p.name, qty: 1, price: p.price });
         }
+        // ---------------------------------
+
         let totalPhones = phoneSubform.reduce((sum, r) => sum + parseFloat(r.Phone_Qty||0), 0);
         if(getVal("On_Site_Install") === "Yes" && totalPhones > 0 && ID_MAP["LABOR"] && priceMap[ID_MAP["LABOR"]]) {
             let p = priceMap[ID_MAP["LABOR"]];
@@ -261,7 +296,6 @@
         if(!dealRecord) { alert("Data not loaded"); return; }
         if(!confirm("Proceed?")) return;
         showLoader(true, "Generating PDF...");
-
         try {
             const { jsPDF } = window.jspdf;
             let element = document.getElementById('quoteContainer');
@@ -310,19 +344,17 @@
         showLoader(true, "Clearing Records...");
         
         let updateMap = {};
-        
         // 1. Clear Fields loop
         for (let key in dealRecord) {
             if (!key.startsWith("$") && !SAFE_FIELDS.includes(key) && dealRecord[key] !== null) { 
-                updateMap[key] = null; 
+                updateMap[key] = null;
             }
         }
         
         // 2. Explicit Subform Clear
-        updateMap["Phone_Hardware"] = []; 
-        
+        updateMap["Phone_Hardware"] = [];
         // 3. User Request: Check this box
-        updateMap["VoiceOS_Other"] = true; 
+        updateMap["VoiceOS_Other"] = true;
         
         ZOHO.CRM.API.updateRecord({ Entity: "Deals", APIData: { id: dealId, ...updateMap } })
         .then(function() {
@@ -344,7 +376,7 @@
     }
 
     function showLoader(v, t) { 
-        document.getElementById("loader").style.display = v?"block":"none"; 
+        document.getElementById("loader").style.display = v?"block":"none";
         if(t) document.getElementById("loaderText").innerText = t; 
     }
 </script>
