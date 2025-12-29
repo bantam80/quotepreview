@@ -69,13 +69,15 @@
         <button class="btn-restart" onclick="handleStartOver()">&#8634; Start Over</button>
         <button class="btn-save" id="btnSave" onclick="handleSaveAndFinish()"><span>Download PDF & Finish</span> <span>&#10140;</span></button>
     </div>
-    <div class="version-footer">Widget Version: V29 (Refresh & Stage Fix)</div>
+    <div class="version-footer">Widget Version: V30 (Smart Transition)</div>
 </div>
 
 <script>
     // --- 1. CONFIGURATION ---
-    const RESTART_TRANSITION_ID = "1231536000013603103"; // To Qualification
-    const PROCEED_TRANSITION_NAME = "Proceed"; 
+    
+    // TARGET TRANSITION NAMES (Case Insensitive)
+    const TRANSITION_NAME_RESTART = "Solution Design"; 
+    const TRANSITION_NAME_PROCEED = "Proceed"; 
 
     const ID_MAP = {
         "DID_LOCAL": "1231536000013261029", "DID_TF": "1231536000013261030",
@@ -90,9 +92,8 @@
         "ONB_POTS": "1231536000013241066", "SITE_SURVEY": "1231536000013499030", "LABOR": "1231536000013235207"
     };
 
-    // UPDATED: Added "Contact_Name"
     const SAFE_FIELDS = [
-        "Contact_Name",
+        "Contact_Name", // PROTECTED FIELD
         "Form_Update_Key", "VoiceOS_Other", "Questionnaire_Link", "Opp_Created_Time",
         "Deal_Name", "Pipeline", "Stage", "Closing_Date", "Account_Name", "Owner", 
         "Probability", "End_Customer", "Next_Step", "id", "Created_Time", 
@@ -134,7 +135,9 @@
         }
     });
 
-    ZOHO.embeddedApp.init();
+    ZOHO.embeddedApp.init().then(function(){
+        console.log("Zoho SDK Initialized");
+    });
 
     function initWidget() {
         document.getElementById("dateDisplay").innerText = "Date: " + new Date().toLocaleDateString();
@@ -187,7 +190,7 @@
                 lineItems.nrc.push({ name: priceMap[ID_MAP[key]].name + " (Setup)", qty: qty, price: priceMap[ID_MAP[key]].price });
             }
         }
-        // Build Entitlements
+        // Entitlements
         let remEnt = parseFloat(getVal("TN_Entitlements") || 0);
         ENTITLEMENT_LIST.forEach(item => {
             let qty = parseFloat(getVal(item.field) || 0);
@@ -258,7 +261,7 @@
         renderRows(lineItems.nrc, "nrcBody", "totalNrcDisplay");
     }
 
-    // --- 6. ACTION: DOWNLOAD + ADVANCE ---
+    // --- 6. ACTION: DOWNLOAD + ADVANCE (Robust) ---
     async function handleSaveAndFinish() {
         if(!dealRecord) { alert("Data not loaded"); return; }
         if(!confirm("Proceed?")) return;
@@ -279,25 +282,11 @@
             let filename = "Quote_Preview_" + (dealRecord.Deal_Name || "Deal").replace(/[^a-z0-9]/gi, '_') + ".pdf";
             pdf.save(filename);
             
-            // 2. Advance Blueprint
+            // 2. Advance Blueprint (Dynamic Lookup)
             document.getElementById("loaderText").innerText = "Advancing Blueprint...";
             setTimeout(function() {
-                ZOHO.CRM.BLUEPRINT.proceed({ transition_id: PROCEED_TRANSITION_NAME, data: {} })
-                .then(function() { 
-                    // REFRESH FIX: Close popup first, if that fails, hard navigation reload
-                    ZOHO.CRM.UI.Popup.closeReload().then(function(data){
-                        // If closeReload returns (meaning it might not have closed immediately), force a navigation reload
-                        console.log("Popup close signal sent. Ensuring refresh...");
-                        setTimeout(function(){
-                            ZOHO.CRM.UI.Record.open({ Entity: "Deals", RecordID: dealId }); 
-                        }, 500);
-                    });
-                })
-                .catch(function(err){
-                    alert("PDF Downloaded.\n\nCould not auto-advance Blueprint. Please click 'Proceed' manually.");
-                    showLoader(false);
-                });
-            }, 1500);
+                findAndExecuteTransition(TRANSITION_NAME_PROCEED);
+            }, 1000);
 
         } catch (e) {
             console.error(e);
@@ -317,20 +306,52 @@
             if (!key.startsWith("$") && !SAFE_FIELDS.includes(key) && dealRecord[key] !== null) { updateMap[key] = null; }
         }
         updateMap["Phone_Hardware"] = []; 
+        updateMap["Stage"] = "Qualification"; // Explicit Stage Reset
         
         ZOHO.CRM.API.updateRecord({ Entity: "Deals", APIData: { id: dealId, ...updateMap } })
         .then(function() {
             document.getElementById("loaderText").innerText = "Resetting Stage...";
-            // Explicitly call the Transition ID provided for Start Over
-            ZOHO.CRM.BLUEPRINT.proceed({ transition_id: RESTART_TRANSITION_ID, data: {} })
-            .then(function() { 
-                ZOHO.CRM.UI.Popup.closeReload(); 
-            })
-            .catch(function(err){
-                console.error("Blueprint Transition Failed:", err);
-                alert("Fields were cleared, but Stage Reset failed.\nReason: " + JSON.stringify(err));
-                ZOHO.CRM.UI.Popup.closeReload();
-            });
+            // Use Dynamic Lookup for Start Over
+            findAndExecuteTransition(TRANSITION_NAME_RESTART);
+        })
+        .catch(function(err){
+             alert("Error Clearing Records: " + JSON.stringify(err));
+             showLoader(false);
+        });
+    }
+
+    // --- 8. SMART TRANSITION ENGINE ---
+    function findAndExecuteTransition(targetName) {
+        ZOHO.CRM.BLUEPRINT.getStatus({ Entity: "Deals", RecordID: dealId })
+        .then(function(data) {
+            if(data && data.transitions) {
+                let match = data.transitions.find(t => t.name.toLowerCase() === targetName.toLowerCase());
+                if(match) {
+                    console.log("Found Transition:", match.name, match.id);
+                    ZOHO.CRM.BLUEPRINT.proceed({ transition_id: match.id, data: {} })
+                    .then(function() { 
+                         // REFRESH: Close popup, then force navigation reload
+                         ZOHO.CRM.UI.Popup.closeReload().then(function(){
+                              setTimeout(function(){
+                                  // This forces the parent window to reload the record page
+                                  ZOHO.CRM.UI.Record.open({ Entity: "Deals", RecordID: dealId });
+                              }, 500);
+                         });
+                    });
+                } else {
+                    let available = data.transitions.map(t => t.name).join(", ");
+                    alert(`Could not find transition '${targetName}'.\nAvailable options: ${available}\n\n(The record has been updated, please close and check the stage manually).`);
+                    showLoader(false);
+                }
+            } else {
+                alert("No Blueprint transitions available for this record.");
+                showLoader(false);
+            }
+        })
+        .catch(function(err) {
+            console.error("Blueprint Error:", err);
+            alert("Blueprint Error:\n" + JSON.stringify(err));
+            showLoader(false);
         });
     }
 
