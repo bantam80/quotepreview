@@ -5,6 +5,8 @@
     <title>Quote Preview & Gatekeeper</title>
     
     <script>
+        // Prevent PDF libraries from using window.postMessage for timing
+        // This stops the "SyntaxError: Unexpected token 's'" in the Zoho SDK
         window.setImmediate = window.setImmediate || function(fn) { return window.setTimeout(fn, 0); };
         window.clearImmediate = window.clearImmediate || function(id) { window.clearTimeout(id); };
     </script>
@@ -69,13 +71,12 @@
         <button class="btn-restart" onclick="handleStartOver()">&#8634; Start Over</button>
         <button class="btn-save" id="btnSave" onclick="handleSaveAndFinish()"><span>Download PDF & Finish</span> <span>&#10140;</span></button>
     </div>
-    <div class="version-footer">Widget Version: V31 (API & Blueprint Fix)</div>
+    <div class="version-footer">Widget Version: V32 (Stable Release)</div>
 </div>
 
 <script>
     // --- 1. CONFIGURATION ---
-    const TRANSITION_NAME_RESTART = "Solution Design"; 
-    const TRANSITION_NAME_PROCEED = "Proceed"; 
+    const RESTART_TRANSITION_ID = "1231536000013603103"; // To Qualification
 
     const ID_MAP = {
         "DID_LOCAL": "1231536000013261029", "DID_TF": "1231536000013261030",
@@ -89,14 +90,6 @@
         "ONB_ADV": "1231536000009612029", "ONB_STD": "1231536000009612028", "ONB_CC": "1231536000009612030",
         "ONB_POTS": "1231536000013241066", "SITE_SURVEY": "1231536000013499030", "LABOR": "1231536000013235207"
     };
-
-    const SAFE_FIELDS = [
-        "Contact_Name", // Field to preserve
-        "Form_Update_Key", "VoiceOS_Other", "Questionnaire_Link", "Opp_Created_Time",
-        "Deal_Name", "Pipeline", "Stage", "Closing_Date", "Account_Name", "Owner", 
-        "Probability", "End_Customer", "Next_Step", "id", "Created_Time", 
-        "Modified_Time", "Created_By", "Modified_By", "Tag", "Layout", "Wizard_Dependency"
-    ];
 
     const MRC_CONFIG = {
         "Voicemail_Transcription": "VMTRANS", "Enhanced_Caller_ID": "ENHCLID", "E911_Locations": "E911",
@@ -171,7 +164,7 @@
         );
         await Promise.all(fetchPromises);
 
-        // Build MRC
+        // Build Lines
         for(let field in MRC_CONFIG) {
             let val = getVal(field);
             let qty = (val === "Yes" || val === true) ? 1 : parseFloat(val || 0);
@@ -180,7 +173,6 @@
                 lineItems.mrc.push({ name: priceMap[ID_MAP[key]].name, qty: qty, price: priceMap[ID_MAP[key]].price, hasOnboarding: (SETUP_CONFIG[field] !== undefined) });
             }
         }
-        // Build Setup
         for(let field in SETUP_CONFIG) {
             let qty = parseFloat(getVal(field) || 0);
             let key = SETUP_CONFIG[field];
@@ -188,7 +180,6 @@
                 lineItems.nrc.push({ name: priceMap[ID_MAP[key]].name + " (Setup)", qty: qty, price: priceMap[ID_MAP[key]].price });
             }
         }
-        // Entitlements
         let remEnt = parseFloat(getVal("TN_Entitlements") || 0);
         ENTITLEMENT_LIST.forEach(item => {
             let qty = parseFloat(getVal(item.field) || 0);
@@ -207,14 +198,12 @@
                 }
             }
         });
-        // Bundles
         let tfMinutes = parseFloat(getVal("Est_Toll_Free_Minutes") || 0);
         if(tfMinutes > 0 && ID_MAP["TF_BUNDLE"] && priceMap[ID_MAP["TF_BUNDLE"]]) {
             let qty = Math.ceil(tfMinutes / 500);
             let p = priceMap[ID_MAP["TF_BUNDLE"]];
             lineItems.mrc.push({ name: p.name + ` (${tfMinutes} min)`, qty: qty, price: p.price, hasOnboarding: false });
         }
-        // Hardware
         phoneSubform.forEach(row => {
             let pid = row.Phone_Selection ? row.Phone_Selection.id : null;
             let qty = parseFloat(row.Phone_Qty || 0);
@@ -222,7 +211,6 @@
                 lineItems.nrc.push({ name: priceMap[pid].name, qty: qty, price: priceMap[pid].price });
             }
         });
-        // Labor
         let analogCount = parseFloat(getVal("Analog_Line_Count")||0) + parseFloat(getVal("POTS_for_Paging_Qty")||0) + parseFloat(getVal("T_38_Fax")||0);
         if(analogCount > 0 && ID_MAP["SITE_SURVEY"] && priceMap[ID_MAP["SITE_SURVEY"]]) {
             let p = priceMap[ID_MAP["SITE_SURVEY"]];
@@ -259,7 +247,7 @@
         renderRows(lineItems.nrc, "nrcBody", "totalNrcDisplay");
     }
 
-    // --- 6. ACTION: DOWNLOAD + ADVANCE (Robust) ---
+    // --- 6. ACTION: DOWNLOAD + ADVANCE (Fail-Safe) ---
     async function handleSaveAndFinish() {
         if(!dealRecord) { alert("Data not loaded"); return; }
         if(!confirm("Proceed?")) return;
@@ -280,11 +268,12 @@
             let filename = "Quote_Preview_" + (dealRecord.Deal_Name || "Deal").replace(/[^a-z0-9]/gi, '_') + ".pdf";
             pdf.save(filename);
             
-            // 2. Advance Blueprint
-            document.getElementById("loaderText").innerText = "Advancing Blueprint...";
-            setTimeout(function() {
-                findAndExecuteTransition(TRANSITION_NAME_PROCEED);
-            }, 1000);
+            // 2. Alert User to Proceed Manually (Best reliability)
+            alert("Quote PDF has been downloaded.\n\nPlease locate the 'Proceed' transition button in the CRM to move to the next stage.");
+            
+            ZOHO.CRM.UI.Popup.closeReload().then(function(){
+                setTimeout(function(){ ZOHO.CRM.UI.Record.open({ Entity: "Deals", RecordID: dealId }); }, 500);
+            });
 
         } catch (e) {
             console.error(e);
@@ -293,71 +282,25 @@
         }
     }
 
-    // --- 7. ACTION: START OVER ---
+    // --- 7. ACTION: START OVER (Direct Transition) ---
     function handleStartOver() {
         if(!dealRecord) return;
-        if(!confirm("Clear all data and Start Over?")) return;
-        showLoader(true, "Clearing Records...");
+        if(!confirm("Start Over?\n(Note: You will need to manually clear fields if required, as the record is locked in Blueprint)")) return;
         
-        let updateMap = {};
-        for (let key in dealRecord) {
-            if (!key.startsWith("$") && !SAFE_FIELDS.includes(key) && dealRecord[key] !== null) { updateMap[key] = null; }
-        }
-        updateMap["Phone_Hardware"] = []; 
-        // REMOVED STAGE UPDATE - Can only update via transition
+        showLoader(true, "Resetting Stage...");
         
-        ZOHO.CRM.API.updateRecord({ Entity: "Deals", APIData: { id: dealId, ...updateMap } })
-        .then(function() {
-            document.getElementById("loaderText").innerText = "Resetting Stage...";
-            // Search for "Solution Design" Transition
-            findAndExecuteTransition(TRANSITION_NAME_RESTART);
+        // Directly trigger the transition ID provided
+        // We do NOT updateRecord first, to avoid 'RECORD_IN_BLUEPRINT' errors
+        ZOHO.CRM.BLUEPRINT.proceed({ transition_id: RESTART_TRANSITION_ID, data: {} })
+        .then(function() { 
+            // Close and Force Refresh
+            ZOHO.CRM.UI.Popup.closeReload().then(function(){
+                 setTimeout(function(){ ZOHO.CRM.UI.Record.open({ Entity: "Deals", RecordID: dealId }); }, 500);
+            });
         })
         .catch(function(err){
-             alert("Error Clearing Records: " + JSON.stringify(err));
-             showLoader(false);
-        });
-    }
-
-    // --- 8. SMART TRANSITION ENGINE (Corrected SDK Call) ---
-    function findAndExecuteTransition(targetName) {
-        // CORRECTED: Using getBlueprint (not getStatus)
-        ZOHO.CRM.API.getBlueprint({ Entity: "Deals", RecordID: dealId })
-        .then(function(data) {
-            console.log("Blueprint Data:", data);
-            
-            if(data && data.blueprint && data.blueprint.transitions) {
-                let match = data.blueprint.transitions.find(t => t.name.toLowerCase() === targetName.toLowerCase());
-                
-                if(match) {
-                    console.log("Found Transition:", match.name, match.id);
-                    ZOHO.CRM.BLUEPRINT.proceed({ transition_id: match.id, data: {} })
-                    .then(function() { 
-                         // REFRESH STRATEGY
-                         ZOHO.CRM.UI.Popup.closeReload().then(function(){
-                              // Fallback force reload if closeReload doesn't trigger parent refresh fast enough
-                              setTimeout(function(){
-                                  ZOHO.CRM.UI.Record.open({ Entity: "Deals", RecordID: dealId });
-                              }, 500);
-                         });
-                    });
-                } else {
-                    let available = data.blueprint.transitions.map(t => t.name).join(", ");
-                    alert(`Could not find transition '${targetName}'.\nAvailable options: ${available}\n\n(The record fields were cleared, but stage update requires manual selection).`);
-                    showLoader(false);
-                }
-            } else {
-                alert("No Blueprint transitions available for this record (It might not be in a Blueprint state).");
-                showLoader(false);
-            }
-        })
-        .catch(function(err) {
             console.error("Blueprint Error:", err);
-            // Specifically catch the "Record not in blueprint" error to handle gracefully
-            if (JSON.stringify(err).indexOf("not in blueprint") > -1) {
-                 alert("This record is not currently in a Blueprint state, so the stage transition cannot be automated.");
-            } else {
-                 alert("Blueprint Error:\n" + JSON.stringify(err));
-            }
+            alert("Could not reset stage automatically.\n\nError: " + JSON.stringify(err));
             showLoader(false);
         });
     }
