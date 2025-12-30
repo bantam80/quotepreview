@@ -76,7 +76,7 @@
         <button class="btn-restart" onclick="handleStartOver()">&#8634; Start Over</button>
         <button class="btn-save" id="btnSave" onclick="handleSaveAndFinish()"><span>Download PDF & Finish</span> <span>&#10140;</span></button>
     </div>
-    <div class="version-footer">Widget Version: V36 (E911 Free Entitlement)</div>
+    <div class="version-footer">Widget Version: V37 (JSON Payload + SKU Support)</div>
 </div>
 
 <script>
@@ -105,12 +105,12 @@
         "Deal_Name", "Pipeline", "Stage", "Closing_Date", "Account_Name", "Owner", 
         "Probability", "End_Customer", "Next_Step", "id", "Created_Time", 
         "Modified_Time", "Created_By", "Modified_By", "Tag", "Layout", "Wizard_Dependency",
-        "Survey_Required"
+        "Survey_Required", "Quote_JSON_Payload"
     ];
 
     const MRC_CONFIG = {
         "Voicemail_Transcription": "VMTRANS", "Enhanced_Caller_ID": "ENHCLID", 
-        // "E911_Locations": "E911", <-- REMOVED (Handled in Entitlements Logic now)
+        // "E911_Locations": "E911", <-- REMOVED (Handled in Entitlements Logic)
         "SIP_Trunks_Qty": "SIP_TRUNK", "TTL_SIP_Trunks_Primary": "SIP_PRI", "TTL_SIP_Trunks_Backup": "SIP_BACK",
         "Standard_Qty": "UC_STD", "Advanced_Qty": "UC_ADV", "Contact_Center_Qty": "UC_CC",
         "POTS_for_Paging_Qty": "POTS", "Webfax": "WEBFAX", "T_38_Fax": "T38",
@@ -150,6 +150,7 @@
     });
 
     function initWidget() {
+        // Generate Quote Ref: Quote: {Last4digits of QuoteID/DealID + Timestamp}
         if(dealId) {
             let shortId = String(dealId).slice(-4);
             let ts = Date.now();
@@ -168,7 +169,7 @@
         });
     }
 
-    // --- 4. CALCULATION (Updated for Step 1: Fetch SKUs) ---
+    // --- 4. CALCULATION ---
     async function calculateQuote() {
         lineItems = { mrc: [], nrc: [] };
         let productsToFetch = new Set();
@@ -178,6 +179,7 @@
         for(let f in MRC_CONFIG) { if(getVal(f) > 0 || getVal(f) === "Yes") queue(MRC_CONFIG[f]); }
         for(let f in SETUP_CONFIG) { if(getVal(f) > 0) queue(SETUP_CONFIG[f]); }
         
+        // Manual Add for E911 since we removed it from MRC_CONFIG
         if(getVal("E911_Locations") > 0) queue("E911");
 
         ENTITLEMENT_LIST.forEach(e => { if(getVal(e.field) > 0) queue(e.key); });
@@ -224,19 +226,19 @@
             }
         }
         
-        // E911 Logic
+        // --- E911 ENTITLEMENT LOGIC ---
         let e911Qty = parseFloat(getVal("E911_Locations") || 0);
         if(e911Qty > 0 && ID_MAP["E911"] && priceMap[ID_MAP["E911"]]) {
             let p = priceMap[ID_MAP["E911"]];
             // First 1 is Free
             lineItems.mrc.push({ name: p.name, qty: 1, price: 0, sku: p.sku, isEntitlement: true, hasOnboarding: false });
             
+            // Remainder (if any) is Paid at Standard Rate
             if(e911Qty > 1) {
                 lineItems.mrc.push({ name: p.name, qty: e911Qty - 1, price: p.price, sku: p.sku, hasOnboarding: false });
             }
         }
 
-        // Entitlements Logic
         let remEnt = parseFloat(getVal("TN_Entitlements") || 0);
         ENTITLEMENT_LIST.forEach(item => {
             let qty = parseFloat(getVal(item.field) || 0);
@@ -245,7 +247,6 @@
                 let freeQty = 0, paidQty = 0;
                 if(qty <= remEnt) { freeQty = qty; remEnt -= qty; } else { freeQty = remEnt; paidQty = qty - remEnt; remEnt = 0; }
                 let p = priceMap[prodId];
-                
                 if(freeQty > 0) {
                     lineItems.mrc.push({ name: p.name, qty: freeQty, price: 0, sku: p.sku, isEntitlement: true, hasOnboarding: false });
                     lineItems.nrc.push({ name: p.name, qty: freeQty, price: 0, sku: p.sku, isEntitlement: true });
@@ -257,7 +258,6 @@
             }
         });
 
-        // Toll Free Bundle
         let tfMinutes = parseFloat(getVal("Est_Toll_Free_Minutes") || 0);
         if(tfMinutes > 0 && ID_MAP["TF_BUNDLE"] && priceMap[ID_MAP["TF_BUNDLE"]]) {
             let qty = Math.ceil(tfMinutes / 500);
@@ -265,7 +265,6 @@
             lineItems.mrc.push({ name: p.name + ` (${tfMinutes} min)`, qty: qty, price: p.price, sku: p.sku, hasOnboarding: false });
         }
 
-        // Phone Hardware
         phoneSubform.forEach(row => {
             let pid = row.Phone_Selection ? row.Phone_Selection.id : null;
             let qty = parseFloat(row.Phone_Qty || 0);
@@ -275,9 +274,9 @@
             }
         });
 
-        // Site Survey
+        // --- UPDATED SITE SURVEY LOGIC ---
         let pagingQty = parseFloat(getVal("POTS_for_Paging_Qty") || 0);
-        let surveyReq = getVal("Survey_Required");
+        let surveyReq = getVal("Survey_Required"); 
         let isSurveyNeeded = (pagingQty > 0) || (surveyReq && String(surveyReq).toLowerCase() === "yes");
 
         if(isSurveyNeeded && ID_MAP["SITE_SURVEY"] && priceMap[ID_MAP["SITE_SURVEY"]]) {
@@ -285,7 +284,6 @@
             lineItems.nrc.push({ name: p.name, qty: 1, price: p.price, sku: p.sku });
         }
 
-        // Labor
         let totalPhones = phoneSubform.reduce((sum, r) => sum + parseFloat(r.Phone_Qty||0), 0);
         if(getVal("On_Site_Install") === "Yes" && totalPhones > 0 && ID_MAP["LABOR"] && priceMap[ID_MAP["LABOR"]]) {
             let p = priceMap[ID_MAP["LABOR"]];
@@ -296,6 +294,8 @@
         renderTables();
         showLoader(false);
     }
+
+    function getVal(key) { return dealRecord[key]; }
 
     // --- 5. RENDER ---
     function renderTables() {
@@ -330,10 +330,9 @@
                 "items": []
             };
 
-            // Helper to format item
             const pushItem = (item, type) => {
                 payloadData.items.push({
-                    "sku": item.sku || "NO-SKU", // Fallback helps debug missing SKUs
+                    "sku": item.sku || "NO-SKU", 
                     "name": item.name,
                     "qty": item.qty,
                     "rate": item.price,
@@ -348,7 +347,6 @@
             let jsonString = JSON.stringify(payloadData);
 
             // --- B. SAVE TO DEAL FIELD ---
-            // We await this to ensure the data is safe before moving on
             try {
                 await ZOHO.CRM.API.updateRecord({ 
                     Entity: "Deals", 
@@ -361,19 +359,17 @@
                 console.error("Payload Save Failed", apiErr);
                 let errStr = JSON.stringify(apiErr);
                 
-                // Blueprint Lock Check
                 if(errStr.indexOf("RECORD_IN_BLUEPRINT") > -1) {
                     alert("BLOCKER: The Blueprint is locking this record.\n\nTo fix: Go to Blueprint settings and add 'Quote_JSON_Payload' to the Transition fields.");
                 } else {
                     alert("Error saving Quote Data to CRM:\n" + errStr);
                 }
                 showLoader(false);
-                return; // STOP here so we don't create a PDF without saved data
+                return; 
             }
 
-            // --- C. GENERATE PDF (Existing Logic) ---
+            // --- C. GENERATE PDF ---
             document.getElementById("loaderText").innerText = "Generating PDF...";
-            
             const { jsPDF } = window.jspdf;
             let element = document.getElementById('quoteContainer');
             let canvas = await html2canvas(element, { scale: 2 });
@@ -384,7 +380,6 @@
             let pdfHeight = (imgProps.height * pdfWidth) / imgProps.width;
             pdf.addImage(imgData, 'JPEG', 0.5, 0.5, pdfWidth, pdfHeight);
             
-            // Force Download
             let filename = "Quote_Preview_" + (dealRecord.Deal_Name || "Deal").replace(/[^a-z0-9]/gi, '_') + ".pdf";
             pdf.save(filename);
             
