@@ -324,9 +324,17 @@
 
         try {
             // --- A. CONSTRUCT JSON PAYLOAD ---
+            // Extract Lookup IDs safely
+            let acctId = (dealRecord.Account_Name) ? dealRecord.Account_Name.id : null;
+            let endCustId = (dealRecord.End_Customer) ? dealRecord.End_Customer.id : null;
+            
             let payloadData = {
                 "quote_ref": document.getElementById("quoteIdDisplay").innerText,
                 "generated_at": new Date().toISOString(),
+                // NEW: ID Context for Zoho Books
+                "crm_account_id": acctId,          // Maps to Customer Name
+                "crm_end_customer_id": endCustId,  // Maps to cf_end_customer
+                "crm_opportunity_id": dealId,      // Maps to 'Project Name'
                 "items": []
             };
 
