@@ -168,16 +168,16 @@
         });
     }
 
-    // --- 4. CALCULATION ---
+    // --- 4. CALCULATION (Updated for Step 1: Fetch SKUs) ---
     async function calculateQuote() {
         lineItems = { mrc: [], nrc: [] };
         let productsToFetch = new Set();
         const queue = (key) => { if(ID_MAP[key]) productsToFetch.add(ID_MAP[key]); };
 
+        // 1. Queue up IDs
         for(let f in MRC_CONFIG) { if(getVal(f) > 0 || getVal(f) === "Yes") queue(MRC_CONFIG[f]); }
         for(let f in SETUP_CONFIG) { if(getVal(f) > 0) queue(SETUP_CONFIG[f]); }
         
-        // Manual Add for E911 since we removed it from MRC_CONFIG
         if(getVal("E911_Locations") > 0) queue("E911");
 
         ENTITLEMENT_LIST.forEach(e => { if(getVal(e.field) > 0) queue(e.key); });
@@ -189,46 +189,54 @@
         queue("SITE_SURVEY"); 
         queue("LABOR");
 
+        // 2. Fetch Pricing AND SKUs
         let priceMap = {};
         let fetchPromises = Array.from(productsToFetch).map(id => 
             ZOHO.CRM.API.getRecord({ Entity: "Products", RecordID: id }).then(r => {
-                if(r.data && r.data[0]) priceMap[id] = { name: r.data[0].Product_Name, price: r.data[0].Unit_Price || 0 };
+                if(r.data && r.data[0]) {
+                    priceMap[id] = { 
+                        name: r.data[0].Product_Name, 
+                        price: r.data[0].Unit_Price || 0,
+                        sku: r.data[0].Product_Code || "" // <--- CAPTURE SKU
+                    };
+                }
             }).catch(e => console.error(e))
         );
 
         await Promise.all(fetchPromises);
 
-        // Build Lines
+        // 3. Build Lines (Now including SKU)
         for(let field in MRC_CONFIG) {
             let val = getVal(field);
             let qty = (val === "Yes" || val === true) ? 1 : parseFloat(val || 0);
             let key = MRC_CONFIG[field];
             if(qty > 0 && ID_MAP[key] && priceMap[ID_MAP[key]]) {
-                lineItems.mrc.push({ name: priceMap[ID_MAP[key]].name, qty: qty, price: priceMap[ID_MAP[key]].price, hasOnboarding: (SETUP_CONFIG[field] !== undefined) });
+                let p = priceMap[ID_MAP[key]];
+                lineItems.mrc.push({ name: p.name, qty: qty, price: p.price, sku: p.sku, hasOnboarding: (SETUP_CONFIG[field] !== undefined) });
             }
         }
         for(let field in SETUP_CONFIG) {
             let qty = parseFloat(getVal(field) || 0);
             let key = SETUP_CONFIG[field];
             if(qty > 0 && ID_MAP[key] && priceMap[ID_MAP[key]]) {
-                lineItems.nrc.push({ name: priceMap[ID_MAP[key]].name + " (Setup)", qty: qty, price: priceMap[ID_MAP[key]].price });
+                let p = priceMap[ID_MAP[key]];
+                lineItems.nrc.push({ name: p.name + " (Setup)", qty: qty, price: p.price, sku: p.sku });
             }
         }
         
-        // --- E911 ENTITLEMENT LOGIC ---
-        // 1 Free per quote
+        // E911 Logic
         let e911Qty = parseFloat(getVal("E911_Locations") || 0);
         if(e911Qty > 0 && ID_MAP["E911"] && priceMap[ID_MAP["E911"]]) {
             let p = priceMap[ID_MAP["E911"]];
             // First 1 is Free
-            lineItems.mrc.push({ name: p.name, qty: 1, price: 0, isEntitlement: true, hasOnboarding: false });
+            lineItems.mrc.push({ name: p.name, qty: 1, price: 0, sku: p.sku, isEntitlement: true, hasOnboarding: false });
             
-            // Remainder (if any) is Paid at Standard Rate
             if(e911Qty > 1) {
-                lineItems.mrc.push({ name: p.name, qty: e911Qty - 1, price: p.price, hasOnboarding: false });
+                lineItems.mrc.push({ name: p.name, qty: e911Qty - 1, price: p.price, sku: p.sku, hasOnboarding: false });
             }
         }
 
+        // Entitlements Logic
         let remEnt = parseFloat(getVal("TN_Entitlements") || 0);
         ENTITLEMENT_LIST.forEach(item => {
             let qty = parseFloat(getVal(item.field) || 0);
@@ -236,57 +244,58 @@
             if(qty > 0 && prodId && priceMap[prodId]) {
                 let freeQty = 0, paidQty = 0;
                 if(qty <= remEnt) { freeQty = qty; remEnt -= qty; } else { freeQty = remEnt; paidQty = qty - remEnt; remEnt = 0; }
-                let pName = priceMap[prodId].name;
+                let p = priceMap[prodId];
+                
                 if(freeQty > 0) {
-                    lineItems.mrc.push({ name: pName, qty: freeQty, price: 0, isEntitlement: true, hasOnboarding: false });
-                    lineItems.nrc.push({ name: pName, qty: freeQty, price: 0, isEntitlement: true });
+                    lineItems.mrc.push({ name: p.name, qty: freeQty, price: 0, sku: p.sku, isEntitlement: true, hasOnboarding: false });
+                    lineItems.nrc.push({ name: p.name, qty: freeQty, price: 0, sku: p.sku, isEntitlement: true });
                 }
                 if(paidQty > 0) {
-                    lineItems.mrc.push({ name: pName, qty: paidQty, price: EXCESS_MRC_RATE, isExcess: true, hasOnboarding: false });
-                    lineItems.nrc.push({ name: pName, qty: paidQty, price: EXCESS_NRC_RATE, isExcess: true });
+                    lineItems.mrc.push({ name: p.name, qty: paidQty, price: EXCESS_MRC_RATE, sku: p.sku, isExcess: true, hasOnboarding: false });
+                    lineItems.nrc.push({ name: p.name, qty: paidQty, price: EXCESS_NRC_RATE, sku: p.sku, isExcess: true });
                 }
             }
         });
 
+        // Toll Free Bundle
         let tfMinutes = parseFloat(getVal("Est_Toll_Free_Minutes") || 0);
         if(tfMinutes > 0 && ID_MAP["TF_BUNDLE"] && priceMap[ID_MAP["TF_BUNDLE"]]) {
             let qty = Math.ceil(tfMinutes / 500);
             let p = priceMap[ID_MAP["TF_BUNDLE"]];
-            lineItems.mrc.push({ name: p.name + ` (${tfMinutes} min)`, qty: qty, price: p.price, hasOnboarding: false });
+            lineItems.mrc.push({ name: p.name + ` (${tfMinutes} min)`, qty: qty, price: p.price, sku: p.sku, hasOnboarding: false });
         }
 
+        // Phone Hardware
         phoneSubform.forEach(row => {
             let pid = row.Phone_Selection ? row.Phone_Selection.id : null;
             let qty = parseFloat(row.Phone_Qty || 0);
             if(pid && qty > 0 && priceMap[pid]) {
-                lineItems.nrc.push({ name: priceMap[pid].name, qty: qty, price: priceMap[pid].price });
+                let p = priceMap[pid];
+                lineItems.nrc.push({ name: p.name, qty: qty, price: p.price, sku: p.sku });
             }
         });
 
-        // --- UPDATED SITE SURVEY LOGIC ---
-        // Trigger ONLY if POTS_for_Paging_Qty > 0 OR Survey_Required == "Yes"
+        // Site Survey
         let pagingQty = parseFloat(getVal("POTS_for_Paging_Qty") || 0);
-        let surveyReq = getVal("Survey_Required"); // Expecting dropdown value "Yes" or "No"
-        
+        let surveyReq = getVal("Survey_Required");
         let isSurveyNeeded = (pagingQty > 0) || (surveyReq && String(surveyReq).toLowerCase() === "yes");
 
         if(isSurveyNeeded && ID_MAP["SITE_SURVEY"] && priceMap[ID_MAP["SITE_SURVEY"]]) {
             let p = priceMap[ID_MAP["SITE_SURVEY"]];
-            lineItems.nrc.push({ name: p.name, qty: 1, price: p.price });
+            lineItems.nrc.push({ name: p.name, qty: 1, price: p.price, sku: p.sku });
         }
 
+        // Labor
         let totalPhones = phoneSubform.reduce((sum, r) => sum + parseFloat(r.Phone_Qty||0), 0);
         if(getVal("On_Site_Install") === "Yes" && totalPhones > 0 && ID_MAP["LABOR"] && priceMap[ID_MAP["LABOR"]]) {
             let p = priceMap[ID_MAP["LABOR"]];
             let laborUnits = Math.ceil(totalPhones / 5.0);
-            lineItems.nrc.push({ name: p.name, qty: laborUnits, price: p.price });
+            lineItems.nrc.push({ name: p.name, qty: laborUnits, price: p.price, sku: p.sku });
         }
 
         renderTables();
         showLoader(false);
     }
-
-    function getVal(key) { return dealRecord[key]; }
 
     // --- 5. RENDER ---
     function renderTables() {
