@@ -315,12 +315,65 @@
         renderRows(lineItems.nrc, "nrcBody", "totalNrcDisplay");
     }
 
-    // --- 6. ACTION: DOWNLOAD + ADVANCE ---
+    // --- 6. ACTION: DOWNLOAD + SAVE PAYLOAD + ADVANCE ---
     async function handleSaveAndFinish() {
         if(!dealRecord) { alert("Data not loaded"); return; }
         if(!confirm("Proceed?")) return;
-        showLoader(true, "Generating PDF...");
+        
+        showLoader(true, "Saving Quote Data...");
+
         try {
+            // --- A. CONSTRUCT JSON PAYLOAD ---
+            let payloadData = {
+                "quote_ref": document.getElementById("quoteIdDisplay").innerText,
+                "generated_at": new Date().toISOString(),
+                "items": []
+            };
+
+            // Helper to format item
+            const pushItem = (item, type) => {
+                payloadData.items.push({
+                    "sku": item.sku || "NO-SKU", // Fallback helps debug missing SKUs
+                    "name": item.name,
+                    "qty": item.qty,
+                    "rate": item.price,
+                    "type": type,
+                    "is_entitlement": !!item.isEntitlement
+                });
+            };
+
+            lineItems.mrc.forEach(i => pushItem(i, "MRC"));
+            lineItems.nrc.forEach(i => pushItem(i, "NRC"));
+
+            let jsonString = JSON.stringify(payloadData);
+
+            // --- B. SAVE TO DEAL FIELD ---
+            // We await this to ensure the data is safe before moving on
+            try {
+                await ZOHO.CRM.API.updateRecord({ 
+                    Entity: "Deals", 
+                    APIData: { 
+                        "id": dealId, 
+                        "Quote_JSON_Payload": jsonString 
+                    } 
+                });
+            } catch (apiErr) {
+                console.error("Payload Save Failed", apiErr);
+                let errStr = JSON.stringify(apiErr);
+                
+                // Blueprint Lock Check
+                if(errStr.indexOf("RECORD_IN_BLUEPRINT") > -1) {
+                    alert("BLOCKER: The Blueprint is locking this record.\n\nTo fix: Go to Blueprint settings and add 'Quote_JSON_Payload' to the Transition fields.");
+                } else {
+                    alert("Error saving Quote Data to CRM:\n" + errStr);
+                }
+                showLoader(false);
+                return; // STOP here so we don't create a PDF without saved data
+            }
+
+            // --- C. GENERATE PDF (Existing Logic) ---
+            document.getElementById("loaderText").innerText = "Generating PDF...";
+            
             const { jsPDF } = window.jspdf;
             let element = document.getElementById('quoteContainer');
             let canvas = await html2canvas(element, { scale: 2 });
@@ -331,11 +384,11 @@
             let pdfHeight = (imgProps.height * pdfWidth) / imgProps.width;
             pdf.addImage(imgData, 'JPEG', 0.5, 0.5, pdfWidth, pdfHeight);
             
-            // 1. Force Download
+            // Force Download
             let filename = "Quote_Preview_" + (dealRecord.Deal_Name || "Deal").replace(/[^a-z0-9]/gi, '_') + ".pdf";
             pdf.save(filename);
             
-            // 2. Advance Blueprint
+            // --- D. ADVANCE BLUEPRINT ---
             document.getElementById("loaderText").innerText = "Advancing Blueprint...";
             setTimeout(function() {
                 ZOHO.CRM.BLUEPRINT.proceed({ transition_id: PROCEED_TRANSITION_ID, data: {} })
@@ -347,14 +400,14 @@
                     });
                 })
                 .catch(function(err){
-                    alert("PDF Downloaded.\n\nCould not auto-advance Blueprint. Please check if 'Proceed' is the correct Transition ID.");
+                    alert("PDF Downloaded & Data Saved.\n\nHowever, could not auto-advance Blueprint.");
                     showLoader(false);
                 });
             }, 1000);
 
         } catch (e) {
             console.error(e);
-            alert("Error: " + e.message);
+            alert("General Error: " + e.message);
             showLoader(false);
         }
     }
