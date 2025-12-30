@@ -76,7 +76,7 @@
         <button class="btn-restart" onclick="handleStartOver()">&#8634; Start Over</button>
         <button class="btn-save" id="btnSave" onclick="handleSaveAndFinish()"><span>Download PDF & Finish</span> <span>&#10140;</span></button>
     </div>
-    <div class="version-footer">Widget Version: V35 (Analog Fix + Site Survey + Quote ID)</div>
+    <div class="version-footer">Widget Version: V36 (E911 Free Entitlement)</div>
 </div>
 
 <script>
@@ -109,12 +109,13 @@
     ];
 
     const MRC_CONFIG = {
-        "Voicemail_Transcription": "VMTRANS", "Enhanced_Caller_ID": "ENHCLID", "E911_Locations": "E911",
+        "Voicemail_Transcription": "VMTRANS", "Enhanced_Caller_ID": "ENHCLID", 
+        // "E911_Locations": "E911", <-- REMOVED (Handled in Entitlements Logic now)
         "SIP_Trunks_Qty": "SIP_TRUNK", "TTL_SIP_Trunks_Primary": "SIP_PRI", "TTL_SIP_Trunks_Backup": "SIP_BACK",
         "Standard_Qty": "UC_STD", "Advanced_Qty": "UC_ADV", "Contact_Center_Qty": "UC_CC",
         "POTS_for_Paging_Qty": "POTS", "Webfax": "WEBFAX", "T_38_Fax": "T38",
         "MS_Teams_SIP": "TEAMS_SIP", "MS_Teams_PBX": "TEAMS_PBX", "Fax_to_Email": "FAX_EMAIL",
-        "Analog_Line_Count": "POTS" // ADDED: Now correctly maps analog lines to the POTS product
+        "Analog_Line_Count": "POTS"
     };
 
     const SETUP_CONFIG = {
@@ -149,7 +150,6 @@
     });
 
     function initWidget() {
-        // Generate Quote Ref: Quote: {Last4digits of QuoteID/DealID + Timestamp}
         if(dealId) {
             let shortId = String(dealId).slice(-4);
             let ts = Date.now();
@@ -177,6 +177,9 @@
         for(let f in MRC_CONFIG) { if(getVal(f) > 0 || getVal(f) === "Yes") queue(MRC_CONFIG[f]); }
         for(let f in SETUP_CONFIG) { if(getVal(f) > 0) queue(SETUP_CONFIG[f]); }
         
+        // Manual Add for E911 since we removed it from MRC_CONFIG
+        if(getVal("E911_Locations") > 0) queue("E911");
+
         ENTITLEMENT_LIST.forEach(e => { if(getVal(e.field) > 0) queue(e.key); });
         if(getVal("Est_Toll_Free_Minutes") > 0) queue("TF_BUNDLE");
         
@@ -212,6 +215,20 @@
             }
         }
         
+        // --- E911 ENTITLEMENT LOGIC ---
+        // 1 Free per quote
+        let e911Qty = parseFloat(getVal("E911_Locations") || 0);
+        if(e911Qty > 0 && ID_MAP["E911"] && priceMap[ID_MAP["E911"]]) {
+            let p = priceMap[ID_MAP["E911"]];
+            // First 1 is Free
+            lineItems.mrc.push({ name: p.name, qty: 1, price: 0, isEntitlement: true, hasOnboarding: false });
+            
+            // Remainder (if any) is Paid at Standard Rate
+            if(e911Qty > 1) {
+                lineItems.mrc.push({ name: p.name, qty: e911Qty - 1, price: p.price, hasOnboarding: false });
+            }
+        }
+
         let remEnt = parseFloat(getVal("TN_Entitlements") || 0);
         ENTITLEMENT_LIST.forEach(item => {
             let qty = parseFloat(getVal(item.field) || 0);
@@ -251,7 +268,6 @@
         let pagingQty = parseFloat(getVal("POTS_for_Paging_Qty") || 0);
         let surveyReq = getVal("Survey_Required"); // Expecting dropdown value "Yes" or "No"
         
-        // Use case-insensitive check for the text "yes" to be safe
         let isSurveyNeeded = (pagingQty > 0) || (surveyReq && String(surveyReq).toLowerCase() === "yes");
 
         if(isSurveyNeeded && ID_MAP["SITE_SURVEY"] && priceMap[ID_MAP["SITE_SURVEY"]]) {
