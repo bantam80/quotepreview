@@ -76,14 +76,14 @@
         <button class="btn-restart" onclick="handleStartOver()">&#8634; Start Over</button>
         <button class="btn-save" id="btnSave" onclick="handleSaveAndFinish()"><span>Download PDF & Finish</span> <span>&#10140;</span></button>
     </div>
-    <div class="version-footer">Widget Version: V44 (Anti-Hang Logic)</div>
+    <div class="version-footer">Widget Version: V45 (Dynamic Blueprint ID)</div>
 </div>
 
 <script>
     // --- 1. CONFIGURATION ---
     
-    // NOTE: Ensure this matches the Transition Name or ID exactly
-    const PROCEED_TRANSITION_ID = "Proceed"; 
+    // NOTE: This must match the BUTTON NAME you see in the CRM Blueprint (Case Insensitive)
+    const TARGET_TRANSITION_NAME = "Proceed"; 
 
     const ID_MAP = {
         "DID_LOCAL": "1231536000013261029", "DID_TF": "1231536000013261030",
@@ -201,7 +201,6 @@
 
         await Promise.all(fetchPromises);
 
-        // Build Lines
         for(let field in MRC_CONFIG) {
             let val = getVal(field);
             let qty = (val === "Yes" || val === true) ? 1 : parseFloat(val || 0);
@@ -353,11 +352,7 @@
             } catch (apiErr) {
                 console.error("Payload Save Failed", apiErr);
                 let errStr = JSON.stringify(apiErr);
-                if(errStr.indexOf("RECORD_IN_BLUEPRINT") > -1) {
-                    alert("BLOCKER: The Blueprint is locking this record.\n\nTo fix: Go to Blueprint settings and add 'Quote_JSON_Payload' AND 'QuoteGen' to the Transition fields.");
-                } else {
-                    alert("Error saving Quote Data to CRM:\n" + errStr);
-                }
+                alert("Error saving Quote Data to CRM:\n" + errStr);
                 showLoader(false);
                 return; 
             }
@@ -377,26 +372,44 @@
             let filename = "Quote_Preview_" + (dealRecord.Deal_Name || "Deal").replace(/[^a-z0-9]/gi, '_') + ".pdf";
             pdf.save(filename);
             
-            // --- D. ADVANCE BLUEPRINT (FIXED LOGIC) ---
+            // --- D. ADVANCE BLUEPRINT (DYNAMIC ID SEARCH) ---
             document.getElementById("loaderText").innerText = "Advancing Blueprint...";
             
-            // Failsafe: Force close if Blueprint hangs for 4 seconds
-            let safetyTimer = setTimeout(function(){
-                 ZOHO.CRM.UI.Popup.close(); // Just close, don't reload
-            }, 4000);
+            // 1. Fetch Available Transitions to find the correct ID
+            let bpStatus = await ZOHO.CRM.BLUEPRINT.getStatus({ Entity: "Deals", RecordID: dealId });
+            let validTransitionId = null;
 
-            ZOHO.CRM.BLUEPRINT.proceed({ transition_id: PROCEED_TRANSITION_ID, data: {} })
+            if(bpStatus && bpStatus.transitions) {
+                bpStatus.transitions.forEach(trans => {
+                    // Check for partial match or exact match on name
+                    if(trans.name.toLowerCase().indexOf(TARGET_TRANSITION_NAME.toLowerCase()) > -1) {
+                        validTransitionId = trans.id;
+                    }
+                });
+            }
+
+            if(!validTransitionId) {
+                alert("Could not find a Blueprint Transition named '" + TARGET_TRANSITION_NAME + "'.\nPlease check the name in the Widget Code.");
+                showLoader(false);
+                return;
+            }
+
+            // 2. Advance using the found ID
+            let safetyTimer = setTimeout(function(){ ZOHO.CRM.UI.Popup.close(); }, 4000);
+
+            ZOHO.CRM.BLUEPRINT.proceed({ transition_id: validTransitionId, data: {} })
             .then(function() { 
                 clearTimeout(safetyTimer);
-                // SUCCESS: Just close the widget. 
-                // The Blueprint Transition naturally refreshes the parent page.
-                // Forcing a reload here causes the collision/hang.
                 ZOHO.CRM.UI.Popup.close(); 
             })
             .catch(function(err){
                 clearTimeout(safetyTimer);
                 console.error("Blueprint Error:", err);
-                alert("PDF Downloaded & Data Saved.\n\nHowever, Blueprint could not advance.\nCheck Transition ID: " + PROCEED_TRANSITION_ID + "\nError: " + JSON.stringify(err));
+                // Alert the specific error message from Zoho (e.g. Mandatory Fields)
+                let errMsg = JSON.stringify(err);
+                if(err && err.responseText) errMsg = err.responseText;
+                
+                alert("Blueprint Error: " + errMsg);
                 ZOHO.CRM.UI.Popup.close();
             });
 
@@ -432,11 +445,7 @@
         })
         .catch(function(err){
              console.error("Update Error:", err);
-             if(JSON.stringify(err).indexOf("RECORD_IN_BLUEPRINT") > -1) {
-                 alert("Cannot reset form automatically:\n\nThe record is locked by the Blueprint. Please manually clear fields or configure 'VoiceOS_Other' as editable in the Blueprint settings.");
-             } else {
-                 alert("Error Clearing Records: " + JSON.stringify(err));
-             }
+             alert("Error Clearing Records: " + JSON.stringify(err));
              showLoader(false);
         });
     }
