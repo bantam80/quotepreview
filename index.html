@@ -76,7 +76,7 @@
         <button class="btn-restart" onclick="handleStartOver()">&#8634; Start Over</button>
         <button class="btn-save" id="btnSave" onclick="handleSaveAndFinish()"><span>Download PDF & Finish</span> <span>&#10140;</span></button>
     </div>
-    <div class="version-footer">Widget Version: V39</div>
+    <div class="version-footer">Widget Version: V42 (QuoteGen Checkbox Active)</div>
 </div>
 
 <script>
@@ -105,7 +105,7 @@
         "Deal_Name", "Pipeline", "Stage", "Closing_Date", "Account_Name", "Owner", 
         "Probability", "End_Customer", "Next_Step", "id", "Created_Time", 
         "Modified_Time", "Created_By", "Modified_By", "Tag", "Layout", "Wizard_Dependency",
-        "Survey_Required", "Quote_JSON_Payload"
+        "Survey_Required", "Quote_JSON_Payload", "QuoteGen"
     ];
 
     const MRC_CONFIG = {
@@ -331,10 +331,10 @@
             let payloadData = {
                 "quote_ref": document.getElementById("quoteIdDisplay").innerText,
                 "generated_at": new Date().toISOString(),
-                // NEW: ID Context for Zoho Books
-                "crm_account_id": acctId,          // Maps to Customer Name
-                "crm_end_customer_id": endCustId,  // Maps to cf_end_customer
-                "crm_opportunity_id": dealId,      // Maps to 'Project Name'
+                // ID Context for Zoho Books
+                "crm_account_id": acctId,          
+                "crm_end_customer_id": endCustId,  
+                "crm_opportunity_id": dealId,      
                 "items": []
             };
 
@@ -354,13 +354,14 @@
 
             let jsonString = JSON.stringify(payloadData);
 
-            // --- B. SAVE TO DEAL FIELD ---
+            // --- B. SAVE TO DEAL FIELD (UPDATED FOR V42: QuoteGen = true) ---
             try {
                 await ZOHO.CRM.API.updateRecord({ 
                     Entity: "Deals", 
                     APIData: { 
                         "id": dealId, 
-                        "Quote_JSON_Payload": jsonString 
+                        "Quote_JSON_Payload": jsonString,
+                        "QuoteGen": true  // <-- NEW: Set Checkbox to True
                     } 
                 });
             } catch (apiErr) {
@@ -368,7 +369,7 @@
                 let errStr = JSON.stringify(apiErr);
                 
                 if(errStr.indexOf("RECORD_IN_BLUEPRINT") > -1) {
-                    alert("BLOCKER: The Blueprint is locking this record.\n\nTo fix: Go to Blueprint settings and add 'Quote_JSON_Payload' to the Transition fields.");
+                    alert("BLOCKER: The Blueprint is locking this record.\n\nTo fix: Go to Blueprint settings and add 'Quote_JSON_Payload' AND 'QuoteGen' to the Transition fields.");
                 } else {
                     alert("Error saving Quote Data to CRM:\n" + errStr);
                 }
