@@ -43,10 +43,12 @@
         .btn-save:hover { background-color: #218838; }
         
         /* OVERLAY LOADER */
-        #loader { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(255,255,255,0.95); z-index: 9999; text-align: center; padding-top: 250px; }
+        #loader { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(255,255,255,0.98); z-index: 9999; text-align: center; padding-top: 250px; }
         .spinner { border: 5px solid #f3f3f3; border-top: 5px solid #3498db; border-radius: 50%; width: 50px; height: 50px; animation: spin 1s linear infinite; display: inline-block; margin-bottom: 15px; }
         #loaderText { font-size: 18px; color: #333; font-weight: 600; }
+        #loaderSubText { font-size: 14px; color: #666; margin-top: 10px; }
         
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
         .version-footer { text-align: center; margin-top: 20px; font-size: 12px; color: #999; opacity: 0.6; }
     </style>
 </head>
@@ -55,6 +57,7 @@
 <div id="loader">
     <div class="spinner"></div>
     <div id="loaderText">Processing...</div>
+    <div id="loaderSubText">Please wait. Verifying update...</div>
 </div>
 
 <div class="container" id="quoteContainer">
@@ -85,13 +88,14 @@
         <button class="btn-restart" onclick="handleStartOver()">&#8634; Start Over</button>
         <button class="btn-save" id="btnSave" onclick="handleSaveAndFinish()"><span>Download PDF & Finish</span> <span>&#10140;</span></button>
     </div>
-    <div class="version-footer">Widget Version: V54 (Fail-Safe Logic)</div>
+    <div class="version-footer">Widget Version: V55 (Trust But Verify)</div>
 </div>
 
 <script>
     // --- 1. CONFIGURATION ---
     const PROCEED_TRANSITION_ID = "Proceed"; 
 
+    // MAPPINGS
     const ID_MAP = {
         "DID_LOCAL": "1231536000013261029", "DID_TF": "1231536000013261030",
         "LNP_LOCAL": "1231536000013261027", "LNP_TF": "1231536000013261028",
@@ -151,7 +155,7 @@
     }
 
     async function calculateQuote() {
-        // [Logic unchanged from V53]
+        // [Logic unchanged for brevity]
         lineItems = { mrc: [], nrc: [] };
         let productsToFetch = new Set();
         const queue = (key) => { if(ID_MAP[key]) productsToFetch.add(ID_MAP[key]); };
@@ -248,18 +252,36 @@
         if(!dealRecord) { alert("Data not loaded"); return; }
         if(!confirm("Are you sure? This will Generate the Quote and Advance the Deal.")) return;
         
+        // STEP 1: Lock UI with Overlay
         showLoader(true, "Initializing...");
 
         try {
+            // STEP 2: Generate PDF (Wait for download trigger)
             updateLoader("Generating PDF...");
             await generatePDF();
 
+            // STEP 3: Save JSON Payload
             updateLoader("Saving Quote Data...");
             await savePayloadToCRM();
 
-            updateLoader("Advancing Blueprint...");
-            // CRITICAL: We pass the callback to handle Success vs Failure cleanly
-            await attemptBlueprintAndClose();
+            // STEP 4: Attempt Blueprint & VERIFY
+            updateLoader("Advancing Blueprint (Verifying)...");
+            
+            // We use a custom function to handle the 400 Error gracefully
+            let success = await attemptBlueprintWithVerification();
+
+            if(success) {
+                updateLoader("Success! Refreshing...");
+                setTimeout(function(){
+                    // Navigate to same record to force full reload
+                    ZOHO.CRM.UI.Record.open({ Entity: "Deals", RecordID: dealId })
+                    .then(() => ZOHO.CRM.UI.Popup.close());
+                }, 1500);
+            } else {
+                // FAILURE PATH: KEEP WIDGET OPEN
+                showLoader(false); // Hide overlay so user can read alert
+                alert("Quote Saved Successfully!\n\nHowever, the Blueprint requires manual input (e.g. FOC Date).\n\nPlease close this window and click the 'Proceed' button manually.");
+            }
 
         } catch (error) {
             console.error(error);
@@ -314,7 +336,7 @@
         });
     }
 
-    function attemptBlueprintAndClose() {
+    function attemptBlueprintWithVerification() {
         return new Promise((resolve, reject) => {
             let transitionData = {};
             if(dealRecord.Next_Step) transitionData.Next_Step = dealRecord.Next_Step;
@@ -323,24 +345,40 @@
             if(dealRecord.Deal_Name) transitionData.Deal_Name = dealRecord.Deal_Name;
             if(dealRecord.Pipeline) transitionData.Pipeline = dealRecord.Pipeline;
 
+            // 1. Send Command
             ZOHO.CRM.BLUEPRINT.proceed({ transition_id: PROCEED_TRANSITION_ID, data: transitionData })
-            .then(() => { 
-                console.log("Blueprint Success");
-                updateLoader("Success! Refreshing...");
-                // SUCCESS PATH: Refresh the Record
+            .then(() => {
+                // 2. WAIT 3 SECONDS (Wait for server 400 or 200)
+                console.log("Command sent. Verifying...");
                 setTimeout(() => {
-                    ZOHO.CRM.UI.Record.open({ Entity: "Deals", RecordID: dealId })
-                    .then(() => { ZOHO.CRM.UI.Popup.close(); resolve(true); });
-                }, 1000);
+                    verifyStageChange(resolve); 
+                }, 3000);
             })
             .catch(err => {
-                console.error("Blueprint Fail", err);
-                // ERROR PATH: DO NOT REFRESH. JUST CLOSE.
-                // This prevents the "Undefined" crash in the CRM UI.
-                alert("Quote Saved Successfully!\n\nHowever, the Blueprint requires manual input (e.g. FOC Date).\n\nPlease close this and click the 'Proceed' button manually.");
-                showLoader(false);
-                setTimeout(() => { ZOHO.CRM.UI.Popup.close(); resolve(true); }, 500);
+                console.error("SDK Reported Error immediately", err);
+                resolve(false); // Return false = Manual Handoff
             });
+        });
+    }
+
+    function verifyStageChange(resolve) {
+        // 3. RE-FETCH RECORD to see if it actually moved
+        ZOHO.CRM.API.getRecord({ Entity: "Deals", RecordID: dealId })
+        .then(function(response) {
+            if(response.data && response.data[0]) {
+                let newStage = response.data[0].Stage;
+                let oldStage = dealRecord.Stage;
+                
+                console.log("Verification: Old=" + oldStage + ", New=" + newStage);
+
+                if(newStage !== oldStage) {
+                    resolve(true); // SUCCESS: It moved!
+                } else {
+                    resolve(false); // FAIL: It is still in the same stage (400 Error occurred)
+                }
+            } else {
+                resolve(false); // API Fail
+            }
         });
     }
 
