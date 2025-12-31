@@ -76,13 +76,13 @@
         <button class="btn-restart" onclick="handleStartOver()">&#8634; Start Over</button>
         <button class="btn-save" id="btnSave" onclick="handleSaveAndFinish()"><span>Download PDF & Finish</span> <span>&#10140;</span></button>
     </div>
-    <div class="version-footer">Widget Version: V43 (Reload Page Logic)</div>
+    <div class="version-footer">Widget Version: V44 (Anti-Hang Logic)</div>
 </div>
 
 <script>
     // --- 1. CONFIGURATION ---
     
-    // NOTE: If "Proceed" fails, replace it with the numeric ID of the transition button.
+    // NOTE: Ensure this matches the Transition Name or ID exactly
     const PROCEED_TRANSITION_ID = "Proceed"; 
 
     const ID_MAP = {
@@ -110,7 +110,6 @@
 
     const MRC_CONFIG = {
         "Voicemail_Transcription": "VMTRANS", "Enhanced_Caller_ID": "ENHCLID", 
-        // "E911_Locations": "E911", <-- REMOVED (Handled in Entitlements Logic)
         "SIP_Trunks_Qty": "SIP_TRUNK", "TTL_SIP_Trunks_Primary": "SIP_PRI", "TTL_SIP_Trunks_Backup": "SIP_BACK",
         "Standard_Qty": "UC_STD", "Advanced_Qty": "UC_ADV", "Contact_Center_Qty": "UC_CC",
         "POTS_for_Paging_Qty": "POTS", "Webfax": "WEBFAX", "T_38_Fax": "T38",
@@ -150,7 +149,6 @@
     });
 
     function initWidget() {
-        // Generate Quote Ref: Quote: {Last4digits of QuoteID/DealID + Timestamp}
         if(dealId) {
             let shortId = String(dealId).slice(-4);
             let ts = Date.now();
@@ -175,13 +173,10 @@
         let productsToFetch = new Set();
         const queue = (key) => { if(ID_MAP[key]) productsToFetch.add(ID_MAP[key]); };
 
-        // 1. Queue up IDs
         for(let f in MRC_CONFIG) { if(getVal(f) > 0 || getVal(f) === "Yes") queue(MRC_CONFIG[f]); }
         for(let f in SETUP_CONFIG) { if(getVal(f) > 0) queue(SETUP_CONFIG[f]); }
         
-        // Manual Add for E911 since we removed it from MRC_CONFIG
         if(getVal("E911_Locations") > 0) queue("E911");
-
         ENTITLEMENT_LIST.forEach(e => { if(getVal(e.field) > 0) queue(e.key); });
         if(getVal("Est_Toll_Free_Minutes") > 0) queue("TF_BUNDLE");
         
@@ -191,7 +186,6 @@
         queue("SITE_SURVEY"); 
         queue("LABOR");
 
-        // 2. Fetch Pricing AND SKUs
         let priceMap = {};
         let fetchPromises = Array.from(productsToFetch).map(id => 
             ZOHO.CRM.API.getRecord({ Entity: "Products", RecordID: id }).then(r => {
@@ -199,7 +193,7 @@
                     priceMap[id] = { 
                         name: r.data[0].Product_Name, 
                         price: r.data[0].Unit_Price || 0,
-                        sku: r.data[0].Product_Code || "" // <--- CAPTURE SKU
+                        sku: r.data[0].Product_Code || "" 
                     };
                 }
             }).catch(e => console.error(e))
@@ -207,7 +201,7 @@
 
         await Promise.all(fetchPromises);
 
-        // 3. Build Lines (Now including SKU)
+        // Build Lines
         for(let field in MRC_CONFIG) {
             let val = getVal(field);
             let qty = (val === "Yes" || val === true) ? 1 : parseFloat(val || 0);
@@ -226,14 +220,10 @@
             }
         }
         
-        // --- E911 ENTITLEMENT LOGIC ---
         let e911Qty = parseFloat(getVal("E911_Locations") || 0);
         if(e911Qty > 0 && ID_MAP["E911"] && priceMap[ID_MAP["E911"]]) {
             let p = priceMap[ID_MAP["E911"]];
-            // First 1 is Free
             lineItems.mrc.push({ name: p.name, qty: 1, price: 0, sku: p.sku, isEntitlement: true, hasOnboarding: false });
-            
-            // Remainder (if any) is Paid at Standard Rate
             if(e911Qty > 1) {
                 lineItems.mrc.push({ name: p.name, qty: e911Qty - 1, price: p.price, sku: p.sku, hasOnboarding: false });
             }
@@ -274,7 +264,6 @@
             }
         });
 
-        // --- UPDATED SITE SURVEY LOGIC ---
         let pagingQty = parseFloat(getVal("POTS_for_Paging_Qty") || 0);
         let surveyReq = getVal("Survey_Required"); 
         let isSurveyNeeded = (pagingQty > 0) || (surveyReq && String(surveyReq).toLowerCase() === "yes");
@@ -297,7 +286,6 @@
 
     function getVal(key) { return dealRecord[key]; }
 
-    // --- 5. RENDER ---
     function renderTables() {
         lineItems.mrc.sort((a, b) => (b.hasOnboarding ? 1 : 0) - (a.hasOnboarding ? 1 : 0));
         let renderRows = (list, bodyId, totalId) => {
@@ -324,14 +312,12 @@
 
         try {
             // --- A. CONSTRUCT JSON PAYLOAD ---
-            // Extract Lookup IDs safely
             let acctId = (dealRecord.Account_Name) ? dealRecord.Account_Name.id : null;
             let endCustId = (dealRecord.End_Customer) ? dealRecord.End_Customer.id : null;
             
             let payloadData = {
                 "quote_ref": document.getElementById("quoteIdDisplay").innerText,
                 "generated_at": new Date().toISOString(),
-                // ID Context for Zoho Books
                 "crm_account_id": acctId,          
                 "crm_end_customer_id": endCustId,  
                 "crm_opportunity_id": dealId,      
@@ -361,13 +347,12 @@
                     APIData: { 
                         "id": dealId, 
                         "Quote_JSON_Payload": jsonString,
-                        "QuoteGen": true  // <-- Checkbox for Workflow Trigger
+                        "QuoteGen": true
                     } 
                 });
             } catch (apiErr) {
                 console.error("Payload Save Failed", apiErr);
                 let errStr = JSON.stringify(apiErr);
-                
                 if(errStr.indexOf("RECORD_IN_BLUEPRINT") > -1) {
                     alert("BLOCKER: The Blueprint is locking this record.\n\nTo fix: Go to Blueprint settings and add 'Quote_JSON_Payload' AND 'QuoteGen' to the Transition fields.");
                 } else {
@@ -392,21 +377,28 @@
             let filename = "Quote_Preview_" + (dealRecord.Deal_Name || "Deal").replace(/[^a-z0-9]/gi, '_') + ".pdf";
             pdf.save(filename);
             
-            // --- D. ADVANCE BLUEPRINT & REFRESH ---
+            // --- D. ADVANCE BLUEPRINT (FIXED LOGIC) ---
             document.getElementById("loaderText").innerText = "Advancing Blueprint...";
-            setTimeout(function() {
-                ZOHO.CRM.BLUEPRINT.proceed({ transition_id: PROCEED_TRANSITION_ID, data: {} })
-                .then(function() { 
-                    // SUCCESS: Close widget and refresh parent page
-                    ZOHO.CRM.UI.Popup.closeReload().then(function(data){
-                        console.log("Widget Closed & Page Reloaded", data);
-                    });
-                })
-                .catch(function(err){
-                    alert("PDF Downloaded & Data Saved.\n\nHowever, could not auto-advance Blueprint.");
-                    showLoader(false);
-                });
-            }, 1000);
+            
+            // Failsafe: Force close if Blueprint hangs for 4 seconds
+            let safetyTimer = setTimeout(function(){
+                 ZOHO.CRM.UI.Popup.close(); // Just close, don't reload
+            }, 4000);
+
+            ZOHO.CRM.BLUEPRINT.proceed({ transition_id: PROCEED_TRANSITION_ID, data: {} })
+            .then(function() { 
+                clearTimeout(safetyTimer);
+                // SUCCESS: Just close the widget. 
+                // The Blueprint Transition naturally refreshes the parent page.
+                // Forcing a reload here causes the collision/hang.
+                ZOHO.CRM.UI.Popup.close(); 
+            })
+            .catch(function(err){
+                clearTimeout(safetyTimer);
+                console.error("Blueprint Error:", err);
+                alert("PDF Downloaded & Data Saved.\n\nHowever, Blueprint could not advance.\nCheck Transition ID: " + PROCEED_TRANSITION_ID + "\nError: " + JSON.stringify(err));
+                ZOHO.CRM.UI.Popup.close();
+            });
 
         } catch (e) {
             console.error(e);
