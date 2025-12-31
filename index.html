@@ -76,7 +76,7 @@
         <button class="btn-restart" onclick="handleStartOver()">&#8634; Start Over</button>
         <button class="btn-save" id="btnSave" onclick="handleSaveAndFinish()"><span>Download PDF & Finish</span> <span>&#10140;</span></button>
     </div>
-    <div class="version-footer">Widget Version: V49 (Payload Injection)</div>
+    <div class="version-footer">Widget Version: V50 (Full Field Injection)</div>
 </div>
 
 <script>
@@ -374,32 +374,35 @@
             let filename = "Quote_Preview_" + (dealRecord.Deal_Name || "Deal").replace(/[^a-z0-9]/gi, '_') + ".pdf";
             pdf.save(filename);
             
-            // --- D. ADVANCE BLUEPRINT (WITH DATA INJECTION) ---
+            // --- D. ADVANCE BLUEPRINT (WITH ALL 5 MANDATORY FIELDS) ---
             document.getElementById("loaderText").innerText = "Advancing Blueprint...";
             
             setTimeout(function() {
                 
-                // PREPARE PAYLOAD FOR BLUEPRINT
-                // If Blueprint requires these fields to be validated, we pass them here.
+                // PREPARE DATA FOR BLUEPRINT VALIDATION
                 let transitionData = {};
                 
                 // 1. Next Step
                 if(dealRecord.Next_Step) transitionData.Next_Step = dealRecord.Next_Step;
                 
-                // 2. End Customer (Pass ID if available)
+                // 2. End Customer (ID)
                 if(dealRecord.End_Customer) transitionData.End_Customer = dealRecord.End_Customer.id;
                 
-                // 3. Account Name (Usually unnecessary, but safe to add)
+                // 3. Account Name (ID)
                 if(dealRecord.Account_Name) transitionData.Account_Name = dealRecord.Account_Name.id;
 
-                // 4. Pipeline (Usually unnecessary)
-                // if(dealRecord.Pipeline) transitionData.Pipeline = dealRecord.Pipeline;
+                // 4. Deal Name
+                if(dealRecord.Deal_Name) transitionData.Deal_Name = dealRecord.Deal_Name;
+                
+                // 5. Pipeline
+                if(dealRecord.Pipeline) transitionData.Pipeline = dealRecord.Pipeline;
 
-                console.log("Attempting Blueprint with data:", transitionData);
+                console.log("Attempting Blueprint with FULL data:", transitionData);
 
                 ZOHO.CRM.BLUEPRINT.proceed({ transition_id: PROCEED_TRANSITION_ID, data: transitionData })
                 .then(function() { 
                     console.log("Blueprint Advanced.");
+                    // Success! Safe to close.
                     setTimeout(function(){ ZOHO.CRM.UI.Popup.close(); }, 2000); 
                 })
                 .catch(function(err){
@@ -408,13 +411,14 @@
                     let errMsg = JSON.stringify(err);
                     if(err && err.responseText) errMsg = err.responseText;
                     
+                    // ON ERROR: DO NOT CLOSE WIDGET (Prevents getAttribute crash)
                     if(errMsg.indexOf("400") > -1 || errMsg.indexOf("Bad Request") > -1) {
-                        alert("SUCCESS: Quote Generated & Data Saved!\n\nNOTE: Auto-advance was skipped because the Blueprint requires manual verification.\n\nPlease click the 'Proceed' button manually.");
+                        alert("SUCCESS: Quote Generated & Data Saved!\n\nSTOP: The Blueprint cannot be auto-advanced because it requires data validation.\n\nACTION: Please close this window and click the 'Proceed' button manually.");
                     } else {
                         alert("Quote Saved. Blueprint Error: " + errMsg);
                     }
                     
-                    setTimeout(function(){ ZOHO.CRM.UI.Popup.close(); }, 500);
+                    showLoader(false); // Just hide loader, keep widget open
                 });
             }, 500);
 
