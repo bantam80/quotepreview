@@ -5,13 +5,11 @@
     <title>Quote Preview & Gatekeeper</title>
     
     <script>
-        // Polyfills for stability
         window.setImmediate = window.setImmediate || function(fn) { return window.setTimeout(fn, 0); };
         window.clearImmediate = window.clearImmediate || function(id) { window.clearTimeout(id); };
     </script>
 
     <script src="https://live.zwidgets.com/js-sdk/1.1/ZohoEmbededAppSDK.min.js"></script>
-    
     <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
 
@@ -44,30 +42,11 @@
         .btn-save { background-color: #28a745; color: white; display: flex; align-items: center; gap: 8px; }
         .btn-save:hover { background-color: #218838; }
         
-        /* OVERLAY LOADER - Blocks entire UI */
-        #loader { 
-            display: none; 
-            position: fixed; 
-            top: 0; left: 0; 
-            width: 100%; height: 100%; 
-            background: rgba(255,255,255,0.95); 
-            z-index: 9999; 
-            text-align: center; 
-            padding-top: 250px; 
-        }
-        .spinner { 
-            border: 5px solid #f3f3f3; 
-            border-top: 5px solid #3498db; 
-            border-radius: 50%; 
-            width: 50px; height: 50px; 
-            animation: spin 1s linear infinite; 
-            display: inline-block; 
-            margin-bottom: 15px;
-        }
+        /* OVERLAY LOADER */
+        #loader { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(255,255,255,0.95); z-index: 9999; text-align: center; padding-top: 250px; }
+        .spinner { border: 5px solid #f3f3f3; border-top: 5px solid #3498db; border-radius: 50%; width: 50px; height: 50px; animation: spin 1s linear infinite; display: inline-block; margin-bottom: 15px; }
         #loaderText { font-size: 18px; color: #333; font-weight: 600; }
-        #loaderSubText { font-size: 13px; color: #666; margin-top: 5px; }
         
-        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
         .version-footer { text-align: center; margin-top: 20px; font-size: 12px; color: #999; opacity: 0.6; }
     </style>
 </head>
@@ -76,7 +55,6 @@
 <div id="loader">
     <div class="spinner"></div>
     <div id="loaderText">Processing...</div>
-    <div id="loaderSubText">Please wait. Do not close this window.</div>
 </div>
 
 <div class="container" id="quoteContainer">
@@ -107,14 +85,13 @@
         <button class="btn-restart" onclick="handleStartOver()">&#8634; Start Over</button>
         <button class="btn-save" id="btnSave" onclick="handleSaveAndFinish()"><span>Download PDF & Finish</span> <span>&#10140;</span></button>
     </div>
-    <div class="version-footer">Widget Version: V53 (Synchronous Execution)</div>
+    <div class="version-footer">Widget Version: V54 (Fail-Safe Logic)</div>
 </div>
 
 <script>
     // --- 1. CONFIGURATION ---
     const PROCEED_TRANSITION_ID = "Proceed"; 
 
-    // MAPPINGS
     const ID_MAP = {
         "DID_LOCAL": "1231536000013261029", "DID_TF": "1231536000013261030",
         "LNP_LOCAL": "1231536000013261027", "LNP_TF": "1231536000013261028",
@@ -143,12 +120,10 @@
     const EXCESS_MRC_RATE = 1.00;
     const EXCESS_NRC_RATE = 2.00;
 
-    // --- 2. STATE ---
     var dealId = null;
     var dealRecord = null;
     var lineItems = { mrc: [], nrc: [] };
 
-    // --- 3. INIT ---
     ZOHO.embeddedApp.on("PageLoad", function(data){
         if(data && data.EntityId) {
             dealId = Array.isArray(data.EntityId) ? data.EntityId[0] : data.EntityId;
@@ -176,7 +151,7 @@
     }
 
     async function calculateQuote() {
-        // [Calculation logic unchanged for brevity - assume standard logic here]
+        // [Logic unchanged from V53]
         lineItems = { mrc: [], nrc: [] };
         let productsToFetch = new Set();
         const queue = (key) => { if(ID_MAP[key]) productsToFetch.add(ID_MAP[key]); };
@@ -198,7 +173,6 @@
         );
         await Promise.all(fetchPromises);
 
-        // Build Lines (Simplified for V53 copy/paste safety)
         for(let f in MRC_CONFIG) {
             let v = getVal(f); let q = (v==="Yes"||v===true)?1:parseFloat(v||0);
             if(q>0 && ID_MAP[MRC_CONFIG[f]] && priceMap[ID_MAP[MRC_CONFIG[f]]]) {
@@ -213,24 +187,37 @@
                 lineItems.nrc.push({name:p.name+" (Setup)", qty:q, price:p.price, sku:p.sku});
             }
         }
-        // Entitlements
         let e911 = parseFloat(getVal("E911_Locations")||0);
         if(e911>0 && priceMap[ID_MAP["E911"]]) {
             let p=priceMap[ID_MAP["E911"]];
             lineItems.mrc.push({name:p.name, qty:1, price:0, sku:p.sku, isEntitlement:true});
             if(e911>1) lineItems.mrc.push({name:p.name, qty:e911-1, price:p.price, sku:p.sku});
         }
-        // Rest of Hardware & Labor logic...
+        let remEnt = parseFloat(getVal("TN_Entitlements")||0);
+        ENTITLEMENT_LIST.forEach(item => {
+            let qty = parseFloat(getVal(item.field)||0);
+            let prodId = ID_MAP[item.key];
+            if(qty>0 && prodId && priceMap[prodId]) {
+                let freeQty=0, paidQty=0;
+                if(qty<=remEnt) { freeQty=qty; remEnt-=qty; } else { freeQty=remEnt; paidQty=qty-remEnt; remEnt=0; }
+                let p = priceMap[prodId];
+                if(freeQty>0) { lineItems.mrc.push({name:p.name,qty:freeQty,price:0,sku:p.sku,isEntitlement:true}); lineItems.nrc.push({name:p.name,qty:freeQty,price:0,sku:p.sku,isEntitlement:true}); }
+                if(paidQty>0) { lineItems.mrc.push({name:p.name,qty:paidQty,price:EXCESS_MRC_RATE,sku:p.sku,isExcess:true}); lineItems.nrc.push({name:p.name,qty:paidQty,price:EXCESS_NRC_RATE,sku:p.sku,isExcess:true}); }
+            }
+        });
+        let tfMinutes = parseFloat(getVal("Est_Toll_Free_Minutes")||0);
+        if(tfMinutes>0 && ID_MAP["TF_BUNDLE"] && priceMap[ID_MAP["TF_BUNDLE"]]) {
+            let qty = Math.ceil(tfMinutes/500); let p = priceMap[ID_MAP["TF_BUNDLE"]];
+            lineItems.mrc.push({ name: p.name+` (${tfMinutes} min)`, qty: qty, price: p.price, sku: p.sku });
+        }
         phoneSubform.forEach(r => {
             let pid = r.Phone_Selection?r.Phone_Selection.id:null; let q=parseFloat(r.Phone_Qty||0);
             if(pid && q>0 && priceMap[pid]) lineItems.nrc.push({name:priceMap[pid].name, qty:q, price:priceMap[pid].price, sku:priceMap[pid].sku});
         });
-        
         let survey = getVal("Survey_Required"); let paging = parseFloat(getVal("POTS_for_Paging_Qty")||0);
         if((paging>0 || (survey && String(survey).toLowerCase()==="yes")) && priceMap[ID_MAP["SITE_SURVEY"]]) {
             let p=priceMap[ID_MAP["SITE_SURVEY"]]; lineItems.nrc.push({name:p.name, qty:1, price:p.price, sku:p.sku});
         }
-        
         let totPhones = phoneSubform.reduce((s,r)=>s+parseFloat(r.Phone_Qty||0),0);
         if(getVal("On_Site_Install")==="Yes" && totPhones>0 && priceMap[ID_MAP["LABOR"]]) {
             let p=priceMap[ID_MAP["LABOR"]]; let u=Math.ceil(totPhones/5.0);
@@ -244,7 +231,6 @@
     function getVal(key) { return dealRecord[key]; }
 
     function renderTables() {
-        // Simple Render Logic
         let fill = (list, body, tot) => {
             let h="", t=0;
             list.forEach(i => {
@@ -262,37 +248,25 @@
         if(!dealRecord) { alert("Data not loaded"); return; }
         if(!confirm("Are you sure? This will Generate the Quote and Advance the Deal.")) return;
         
-        // STEP 1: Lock UI
         showLoader(true, "Initializing...");
 
         try {
-            // STEP 2: Generate PDF (Blocking)
-            updateLoader("Generating PDF Document...");
-            await generatePDF(); // Await ensures this finishes before we touch the server
+            updateLoader("Generating PDF...");
+            await generatePDF();
 
-            // STEP 3: Save JSON Payload
             updateLoader("Saving Quote Data...");
             await savePayloadToCRM();
 
-            // STEP 4: Advance Blueprint
             updateLoader("Advancing Blueprint...");
-            await advanceBlueprint();
-
-            // STEP 5: Success! Refresh & Close
-            updateLoader("Success! Refreshing...");
-            setTimeout(function(){
-                refreshAndClose();
-            }, 1500); // 1.5s delay to let users see the "Success" message
+            // CRITICAL: We pass the callback to handle Success vs Failure cleanly
+            await attemptBlueprintAndClose();
 
         } catch (error) {
             console.error(error);
-            // On error, we keep the widget open but hide the loader so user can retry manually
-            showLoader(false); 
+            showLoader(false);
             alert("Process Interrupted:\n" + error.message);
         }
     }
-
-    // --- HELPER FUNCTIONS (PROMISIFIED) ---
 
     function generatePDF() {
         return new Promise(async (resolve, reject) => {
@@ -315,19 +289,13 @@
 
     function savePayloadToCRM() {
         return new Promise((resolve, reject) => {
-            // Construct Payload
             let acctId = (dealRecord.Account_Name) ? dealRecord.Account_Name.id : null;
             let endCustId = (dealRecord.End_Customer) ? dealRecord.End_Customer.id : null;
-            
             let payloadData = {
                 "quote_ref": document.getElementById("quoteIdDisplay").innerText,
                 "generated_at": new Date().toISOString(),
-                "crm_account_id": acctId,          
-                "crm_end_customer_id": endCustId,  
-                "crm_opportunity_id": dealId,      
-                "items": []
+                "crm_account_id": acctId, "crm_end_customer_id": endCustId, "crm_opportunity_id": dealId, "items": []
             };
-
             const pushItem = (item, type) => {
                 payloadData.items.push({
                     "sku": item.sku || "NO-SKU", "name": item.name, "qty": item.qty,
@@ -339,20 +307,15 @@
 
             ZOHO.CRM.API.updateRecord({ 
                 Entity: "Deals", 
-                APIData: { 
-                    "id": dealId, 
-                    "Quote_JSON_Payload": JSON.stringify(payloadData), 
-                    "QuoteGen": true 
-                } 
+                APIData: { "id": dealId, "Quote_JSON_Payload": JSON.stringify(payloadData), "QuoteGen": true } 
             })
             .then(data => resolve(data))
             .catch(err => reject(new Error("CRM Save Failed: " + JSON.stringify(err))));
         });
     }
 
-    function advanceBlueprint() {
+    function attemptBlueprintAndClose() {
         return new Promise((resolve, reject) => {
-            // Prepare Mandatory Fields
             let transitionData = {};
             if(dealRecord.Next_Step) transitionData.Next_Step = dealRecord.Next_Step;
             if(dealRecord.End_Customer) transitionData.End_Customer = dealRecord.End_Customer.id;
@@ -361,24 +324,23 @@
             if(dealRecord.Pipeline) transitionData.Pipeline = dealRecord.Pipeline;
 
             ZOHO.CRM.BLUEPRINT.proceed({ transition_id: PROCEED_TRANSITION_ID, data: transitionData })
-            .then(() => resolve(true))
+            .then(() => { 
+                console.log("Blueprint Success");
+                updateLoader("Success! Refreshing...");
+                // SUCCESS PATH: Refresh the Record
+                setTimeout(() => {
+                    ZOHO.CRM.UI.Record.open({ Entity: "Deals", RecordID: dealId })
+                    .then(() => { ZOHO.CRM.UI.Popup.close(); resolve(true); });
+                }, 1000);
+            })
             .catch(err => {
-                // If it's a 400 error, we reject with a specific message
-                let msg = JSON.stringify(err);
-                if(msg.indexOf("400") > -1) {
-                    reject(new Error("Blueprint Validation Failed.\n\nRequired fields (e.g. FOC Date) are missing.\n\nData was saved, but you must click 'Proceed' manually."));
-                } else {
-                    reject(new Error("Blueprint Error: " + msg));
-                }
+                console.error("Blueprint Fail", err);
+                // ERROR PATH: DO NOT REFRESH. JUST CLOSE.
+                // This prevents the "Undefined" crash in the CRM UI.
+                alert("Quote Saved Successfully!\n\nHowever, the Blueprint requires manual input (e.g. FOC Date).\n\nPlease close this and click the 'Proceed' button manually.");
+                showLoader(false);
+                setTimeout(() => { ZOHO.CRM.UI.Popup.close(); resolve(true); }, 500);
             });
-        });
-    }
-
-    function refreshAndClose() {
-        // Robust Refresh Logic: Navigate to same record to force reload
-        ZOHO.CRM.UI.Record.open({ Entity: "Deals", RecordID: dealId })
-        .then(() => {
-            ZOHO.CRM.UI.Popup.close();
         });
     }
 
@@ -386,9 +348,23 @@
         if(!dealRecord) return;
         if(!confirm("Clear all data and Start Over?")) return;
         showLoader(true, "Clearing...");
-        // (Clear logic omitted for brevity, same as before)
-        // ...
-        refreshAndClose(); // Use same refresh logic
+        let updateMap = {};
+        for (let key in dealRecord) {
+            if (!key.startsWith("$") && !SAFE_FIELDS.includes(key) && dealRecord[key] !== null) { 
+                updateMap[key] = null;
+            }
+        }
+        updateMap["Phone_Hardware"] = [];
+        updateMap["VoiceOS_Other"] = true;
+        ZOHO.CRM.API.updateRecord({ Entity: "Deals", APIData: { id: dealId, ...updateMap } })
+        .then(() => {
+            ZOHO.CRM.UI.Record.open({ Entity: "Deals", RecordID: dealId }).then(() => ZOHO.CRM.UI.Popup.close());
+        })
+        .catch(err => {
+             console.error("Update Error:", err);
+             alert("Error Clearing Records: " + JSON.stringify(err));
+             showLoader(false);
+        });
     }
 
     function showLoader(v, t) { 
