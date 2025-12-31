@@ -76,7 +76,7 @@
         <button class="btn-restart" onclick="handleStartOver()">&#8634; Start Over</button>
         <button class="btn-save" id="btnSave" onclick="handleSaveAndFinish()"><span>Download PDF & Finish</span> <span>&#10140;</span></button>
     </div>
-    <div class="version-footer">Widget Version: V50 (Full Field Injection)</div>
+    <div class="version-footer">Widget Version: V51 (V42 Logic + Data Injection)</div>
 </div>
 
 <script>
@@ -374,36 +374,24 @@
             let filename = "Quote_Preview_" + (dealRecord.Deal_Name || "Deal").replace(/[^a-z0-9]/gi, '_') + ".pdf";
             pdf.save(filename);
             
-            // --- D. ADVANCE BLUEPRINT (WITH ALL 5 MANDATORY FIELDS) ---
+            // --- D. ADVANCE BLUEPRINT (V42 Style: Reload Page) ---
             document.getElementById("loaderText").innerText = "Advancing Blueprint...";
             
+            // 1. Prepare Data for 400 Error Prevention
+            let transitionData = {};
+            if(dealRecord.Next_Step) transitionData.Next_Step = dealRecord.Next_Step;
+            if(dealRecord.End_Customer) transitionData.End_Customer = dealRecord.End_Customer.id;
+            if(dealRecord.Account_Name) transitionData.Account_Name = dealRecord.Account_Name.id;
+            if(dealRecord.Deal_Name) transitionData.Deal_Name = dealRecord.Deal_Name;
+            if(dealRecord.Pipeline) transitionData.Pipeline = dealRecord.Pipeline;
+
+            // 2. Call Proceed with Data
             setTimeout(function() {
-                
-                // PREPARE DATA FOR BLUEPRINT VALIDATION
-                let transitionData = {};
-                
-                // 1. Next Step
-                if(dealRecord.Next_Step) transitionData.Next_Step = dealRecord.Next_Step;
-                
-                // 2. End Customer (ID)
-                if(dealRecord.End_Customer) transitionData.End_Customer = dealRecord.End_Customer.id;
-                
-                // 3. Account Name (ID)
-                if(dealRecord.Account_Name) transitionData.Account_Name = dealRecord.Account_Name.id;
-
-                // 4. Deal Name
-                if(dealRecord.Deal_Name) transitionData.Deal_Name = dealRecord.Deal_Name;
-                
-                // 5. Pipeline
-                if(dealRecord.Pipeline) transitionData.Pipeline = dealRecord.Pipeline;
-
-                console.log("Attempting Blueprint with FULL data:", transitionData);
-
                 ZOHO.CRM.BLUEPRINT.proceed({ transition_id: PROCEED_TRANSITION_ID, data: transitionData })
                 .then(function() { 
                     console.log("Blueprint Advanced.");
-                    // Success! Safe to close.
-                    setTimeout(function(){ ZOHO.CRM.UI.Popup.close(); }, 2000); 
+                    // V42 LOGIC: Close and Reload to update parent page
+                    ZOHO.CRM.UI.Popup.closeReload().then(function(){});
                 })
                 .catch(function(err){
                     console.error("Blueprint Error:", err);
@@ -411,16 +399,17 @@
                     let errMsg = JSON.stringify(err);
                     if(err && err.responseText) errMsg = err.responseText;
                     
-                    // ON ERROR: DO NOT CLOSE WIDGET (Prevents getAttribute crash)
+                    // Alert the user so they aren't confused why it didn't move
                     if(errMsg.indexOf("400") > -1 || errMsg.indexOf("Bad Request") > -1) {
-                        alert("SUCCESS: Quote Generated & Data Saved!\n\nSTOP: The Blueprint cannot be auto-advanced because it requires data validation.\n\nACTION: Please close this window and click the 'Proceed' button manually.");
+                         alert("Quote Saved!\n\nAuto-Advance Skipped: Blueprint requires manual data entry.\nPlease click 'Proceed' manually.");
                     } else {
-                        alert("Quote Saved. Blueprint Error: " + errMsg);
+                         alert("Quote Saved. Blueprint Error: " + errMsg);
                     }
                     
-                    showLoader(false); // Just hide loader, keep widget open
+                    // Close anyway so they can perform the manual action
+                    ZOHO.CRM.UI.Popup.close();
                 });
-            }, 500);
+            }, 1000);
 
         } catch (e) {
             console.error(e);
