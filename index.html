@@ -48,6 +48,7 @@
         #loaderText { font-size: 18px; color: #333; font-weight: 600; }
         #loaderSubText { font-size: 14px; color: #666; margin-top: 10px; }
         
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
         .version-footer { text-align: center; margin-top: 20px; font-size: 12px; color: #999; opacity: 0.6; }
     </style>
 </head>
@@ -87,7 +88,7 @@
         <button class="btn-restart" onclick="handleStartOver()">&#8634; Start Over</button>
         <button class="btn-save" id="btnSave" onclick="handleSaveAndFinish()"><span>Download PDF & Finish</span> <span>&#10140;</span></button>
     </div>
-    <div class="version-footer">Widget Version: V56 (Debug & Timing)</div>
+    <div class="version-footer">Widget Version: V57 (Workflow Cooldown)</div>
 </div>
 
 <script>
@@ -162,7 +163,7 @@
     }
 
     async function calculateQuote() {
-        // [Logic unchanged from previous versions]
+        // [Logic unchanged]
         lineItems = { mrc: [], nrc: [] };
         let productsToFetch = new Set();
         const queue = (key) => { if(ID_MAP[key]) productsToFetch.add(ID_MAP[key]); };
@@ -259,22 +260,26 @@
         if(!dealRecord) { alert("Data not loaded"); return; }
         if(!confirm("Are you sure? This will Generate the Quote and Advance the Deal.")) return;
         
-        // START DEBUG TIMER
         startTime = Date.now();
         logDebug("Process Started");
-
         showLoader(true, "Initializing...");
 
         try {
             updateLoader("Generating PDF...");
             logDebug("Start PDF Generation");
             await generatePDF();
-            logDebug("PDF Download Triggered");
+            logDebug("PDF Done");
 
             updateLoader("Saving Quote Data...");
             logDebug("Start Payload Save");
             await savePayloadToCRM();
-            logDebug("Payload Saved (QuoteGen=true)");
+            logDebug("Payload Saved");
+
+            // --- THE FIX: WAIT FOR WORKFLOW TO CLEAR ---
+            updateLoader("Processing Backend Workflows...");
+            logDebug("Waiting 3s for Workflow Cooldown...");
+            await new Promise(r => setTimeout(r, 3000));
+            logDebug("Cooldown Finished");
 
             updateLoader("Advancing Blueprint...");
             logDebug("Start Blueprint Transition");
@@ -289,28 +294,27 @@
 
             ZOHO.CRM.BLUEPRINT.proceed({ transition_id: PROCEED_TRANSITION_ID, data: transitionData })
             .then(() => { 
-                logDebug("Blueprint Proceed Success (SDK callback)");
-                updateLoader("Success! Refreshing in 5 seconds...");
+                logDebug("Blueprint Proceed Success");
+                updateLoader("Success! Refreshing in 3 seconds...");
                 
-                // LONG DELAY: Ensure books sync and PDF download are safe
+                // WAIT FOR PDF DOWNLOAD + REFRESH
                 setTimeout(() => {
-                    logDebug("Timer Done. Triggering Hard Refresh.");
+                    logDebug("Triggering Record Open");
                     refreshAndClose();
-                }, 5000); // 5 Seconds
+                }, 3000); 
             })
             .catch(err => {
                 logDebug("Blueprint Failed: " + JSON.stringify(err));
                 console.error("Blueprint Error:", err);
+                
                 let errMsg = JSON.stringify(err);
                 if(err && err.responseText) errMsg = err.responseText;
                 
                 if(errMsg.indexOf("400") > -1 || errMsg.indexOf("Bad Request") > -1) {
-                     alert("Quote Saved!\n\nHowever, the Blueprint requires manual input.\n\nPlease close this and click 'Proceed' manually.");
+                     alert("Quote Saved!\n\nWorkflow conflict detected (400 Error).\n\nThe Quote was generated, but you must click 'Proceed' manually to finish the transition.");
                 } else {
                      alert("Quote Saved. Blueprint Error: " + errMsg);
                 }
-                
-                // Even on error, we keep the window open for a moment so they see the alert
                 showLoader(false);
             });
 
@@ -368,11 +372,8 @@
     }
 
     function refreshAndClose() {
-        // Robust Refresh Logic
         ZOHO.CRM.UI.Record.open({ Entity: "Deals", RecordID: dealId })
-        .then(() => {
-            ZOHO.CRM.UI.Popup.close();
-        });
+        .then(() => { ZOHO.CRM.UI.Popup.close(); });
     }
 
     function handleStartOver() {
