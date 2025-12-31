@@ -76,14 +76,14 @@
         <button class="btn-restart" onclick="handleStartOver()">&#8634; Start Over</button>
         <button class="btn-save" id="btnSave" onclick="handleSaveAndFinish()"><span>Download PDF & Finish</span> <span>&#10140;</span></button>
     </div>
-    <div class="version-footer">Widget Version: V45 (Dynamic Blueprint ID)</div>
+    <div class="version-footer">Widget Version: V46 (Stable Transition)</div>
 </div>
 
 <script>
     // --- 1. CONFIGURATION ---
     
-    // NOTE: This must match the BUTTON NAME you see in the CRM Blueprint (Case Insensitive)
-    const TARGET_TRANSITION_NAME = "Proceed"; 
+    // IMPORTANT: If this fails, replace "Proceed" with the long ID number (e.g. "3920480000000289012")
+    const PROCEED_TRANSITION_ID = "Proceed"; 
 
     const ID_MAP = {
         "DID_LOCAL": "1231536000013261029", "DID_TF": "1231536000013261030",
@@ -352,7 +352,11 @@
             } catch (apiErr) {
                 console.error("Payload Save Failed", apiErr);
                 let errStr = JSON.stringify(apiErr);
-                alert("Error saving Quote Data to CRM:\n" + errStr);
+                if(errStr.indexOf("RECORD_IN_BLUEPRINT") > -1) {
+                    alert("BLOCKER: The Blueprint is locking this record.\n\nTo fix: Go to Blueprint settings and add 'Quote_JSON_Payload' AND 'QuoteGen' to the Transition fields.");
+                } else {
+                    alert("Error saving Quote Data to CRM:\n" + errStr);
+                }
                 showLoader(false);
                 return; 
             }
@@ -372,32 +376,13 @@
             let filename = "Quote_Preview_" + (dealRecord.Deal_Name || "Deal").replace(/[^a-z0-9]/gi, '_') + ".pdf";
             pdf.save(filename);
             
-            // --- D. ADVANCE BLUEPRINT (DYNAMIC ID SEARCH) ---
+            // --- D. ADVANCE BLUEPRINT (DIRECT METHOD) ---
             document.getElementById("loaderText").innerText = "Advancing Blueprint...";
             
-            // 1. Fetch Available Transitions to find the correct ID
-            let bpStatus = await ZOHO.CRM.BLUEPRINT.getStatus({ Entity: "Deals", RecordID: dealId });
-            let validTransitionId = null;
-
-            if(bpStatus && bpStatus.transitions) {
-                bpStatus.transitions.forEach(trans => {
-                    // Check for partial match or exact match on name
-                    if(trans.name.toLowerCase().indexOf(TARGET_TRANSITION_NAME.toLowerCase()) > -1) {
-                        validTransitionId = trans.id;
-                    }
-                });
-            }
-
-            if(!validTransitionId) {
-                alert("Could not find a Blueprint Transition named '" + TARGET_TRANSITION_NAME + "'.\nPlease check the name in the Widget Code.");
-                showLoader(false);
-                return;
-            }
-
-            // 2. Advance using the found ID
+            // Safety Timer: Force Close if hung
             let safetyTimer = setTimeout(function(){ ZOHO.CRM.UI.Popup.close(); }, 4000);
 
-            ZOHO.CRM.BLUEPRINT.proceed({ transition_id: validTransitionId, data: {} })
+            ZOHO.CRM.BLUEPRINT.proceed({ transition_id: PROCEED_TRANSITION_ID, data: {} })
             .then(function() { 
                 clearTimeout(safetyTimer);
                 ZOHO.CRM.UI.Popup.close(); 
@@ -405,11 +390,11 @@
             .catch(function(err){
                 clearTimeout(safetyTimer);
                 console.error("Blueprint Error:", err);
-                // Alert the specific error message from Zoho (e.g. Mandatory Fields)
+                // Alert the user so they know to fix the Transition ID
                 let errMsg = JSON.stringify(err);
                 if(err && err.responseText) errMsg = err.responseText;
                 
-                alert("Blueprint Error: " + errMsg);
+                alert("Saved Data, but Blueprint Failed.\n\nReason: " + errMsg + "\n\nVerify that the Transition ID '" + PROCEED_TRANSITION_ID + "' is correct.");
                 ZOHO.CRM.UI.Popup.close();
             });
 
